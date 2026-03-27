@@ -8,8 +8,8 @@ use lan_mouse::{
     service::{Service, ServiceError},
 };
 use lan_mouse_cli::CliError;
-#[cfg(feature = "gtk")]
-use lan_mouse_gtk::GtkError;
+#[cfg(feature = "egui")]
+use lan_mouse_egui::EguiError;
 use lan_mouse_ipc::{IpcError, IpcListenerCreationError};
 use std::{
     future::Future,
@@ -33,9 +33,9 @@ enum LanMouseError {
     Capture(#[from] InputCaptureError),
     #[error(transparent)]
     Emulation(#[from] InputEmulationError),
-    #[cfg(feature = "gtk")]
+    #[cfg(feature = "egui")]
     #[error(transparent)]
-    Gtk(#[from] GtkError),
+    Egui(#[from] EguiError),
     #[error(transparent)]
     Cli(#[from] CliError),
 }
@@ -71,10 +71,10 @@ fn run() -> Result<(), LanMouseError> {
         None => {
             //  otherwise start the service as a child process and
             //  run a frontend
-            #[cfg(feature = "gtk")]
+            #[cfg(feature = "egui")]
             {
                 let mut service = start_service()?;
-                let res = lan_mouse_gtk::run();
+                let res = lan_mouse_egui::run();
                 #[cfg(unix)]
                 {
                     // on unix we give the service a chance to terminate gracefully
@@ -87,9 +87,9 @@ fn run() -> Result<(), LanMouseError> {
                 service.kill()?;
                 res?;
             }
-            #[cfg(not(feature = "gtk"))]
+            #[cfg(not(feature = "egui"))]
             {
-                // run daemon if gtk is diabled
+                // run daemon if egui is disabled
                 match run_async(run_service(config)) {
                     Err(LanMouseError::Service(ServiceError::IpcListen(
                         IpcListenerCreationError::AlreadyRunning,

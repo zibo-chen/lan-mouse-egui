@@ -15,7 +15,7 @@ Focus lies on performance, ease of use and a maintainable implementation that ca
 
 ***blazingly fast™*** because it's written in rust.
 
-- _Now with a gtk frontend_
+- _Now with an egui frontend_
 
 <picture>
     <source media="(prefers-color-scheme: dark)" srcset="/screenshots/dark.png?raw=true">
@@ -208,7 +208,7 @@ The `pre-commit` script runs `cargo fmt --all` (and fails if files were modified
 
 ```sh
 # Install dependencies
-brew install libadwaita pkg-config imagemagick
+brew install imagemagick
 cargo install cargo-bundle
 # Create the macOS icon file
 scripts/makeicns.sh
@@ -223,7 +223,7 @@ scripts/copy-macos-dylib.sh
     <summary>Ubuntu and derivatives</summary>
 
 ```sh
-sudo apt install libadwaita-1-dev libgtk-4-dev libx11-dev libxtst-dev
+sudo apt install libx11-dev libxtst-dev
 ```
 </details>
 
@@ -231,7 +231,7 @@ sudo apt install libadwaita-1-dev libgtk-4-dev libx11-dev libxtst-dev
     <summary>Arch and derivatives</summary>
 
 ```sh
-sudo pacman -S libadwaita gtk libx11 libxtst
+sudo pacman -S libx11 libxtst
 ```
 </details>
 
@@ -239,7 +239,7 @@ sudo pacman -S libadwaita gtk libx11 libxtst
     <summary>Fedora and derivatives</summary>
 
 ```sh
-sudo dnf install libadwaita-devel libXtst-devel libX11-devel
+sudo dnf install libXtst-devel libX11-devel
 ```
 </details>
 <details>
@@ -261,50 +261,15 @@ nix develop
     <summary>Windows</summary>
 
 - First install [Rust](https://www.rust-lang.org/tools/install).
-
-- Then follow the instructions at [gtk-rs.org](https://gtk-rs.org/gtk4-rs/stable/latest/book/installation_windows.html)
-
-*TLDR:*
-
-Build gtk from source
-
-- The following commands should be run in an **admin power shell** instance:
-```sh
-# install chocolatey
-Set-ExecutionPolicy Bypass -Scope Process -Force; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-
-# install gvsbuild dependencies
-choco install python git msys2 visualstudio2022-workload-vctools
-```
-
-- The following commands should be run in a **regular power shell** instance:
-
-```sh
-# install gvsbuild with python
-python -m pip install --user pipx
-python -m pipx ensurepath
-```
-
-- Relaunch your powershell instance so the changes in the environment are reflected.
-```sh
-pipx install gvsbuild
-
-# build gtk + libadwaita
-gvsbuild build gtk4 libadwaita librsvg adwaita-icon-theme
-```
-
-- **Make sure to add the directory** `C:\gtk-build\gtk\x64\release\bin`
-[**to the `PATH` environment variable**]((https://learn.microsoft.com/en-us/previous-versions/office/developer/sharepoint-2010/ee537574(v=office.14))). Otherwise the project will fail to build.
-
-To avoid building GTK from source, it is possible to disable
-the gtk frontend (see conditional compilation).
+- Install the Rust MSVC toolchain.
+- Build with `cargo build`.
 </details>
 
 ## Usage
 <details>
-    <summary>Gtk Frontend</summary>
+    <summary>egui Frontend</summary>
 
-By default the gtk frontend will open when running `lan-mouse`.
+By default the egui frontend will open when running `lan-mouse`.
 
 To connect a device you want to control, simply click the `Add` button and enter the hostname
 of the device.
@@ -415,7 +380,7 @@ port = 4242
 Where `left` can be either `left`, `right`, `top` or `bottom`.
 
 ## Roadmap
-- [x] Graphical frontend (gtk + libadwaita)
+- [x] Graphical frontend (egui)
 - [x] respect xdg-config-home for config file location.
 - [x] IP Address switching
 - [x] Liveness tracking Automatically ungrab mouse when client unreachable

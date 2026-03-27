@@ -3,9 +3,9 @@ members = [
     "input-capture",
     "input-emulation",
     "input-event",
+    "lan-mouse-egui",
     "lan-mouse-ipc",
     "lan-mouse-cli",
-    "lan-mouse-gtk",
     "lan-mouse-proto",
 ]
 
@@ -31,7 +31,7 @@ input-event = { path = "input-event", version = "0.3.0" }
 input-emulation = { path = "input-emulation", version = "0.3.0", default-features = false }
 input-capture = { path = "input-capture", version = "0.3.0", default-features = false }
 lan-mouse-cli = { path = "lan-mouse-cli", version = "0.2.0" }
-lan-mouse-gtk = { path = "lan-mouse-gtk", version = "0.2.0", optional = true }
+lan-mouse-egui = { path = "lan-mouse-egui", version = "0.1.0", optional = true }
 lan-mouse-ipc = { path = "lan-mouse-ipc", version = "0.2.0" }
 lan-mouse-proto = { path = "lan-mouse-proto", version = "0.2.0" }
 shadow-rs = { version = "1.2.0", features = ["metadata"] }
@@ -73,7 +73,7 @@ libc = "0.2.148"
 
 [features]
 default = [
-    "gtk",
+    "egui",
     "layer_shell_capture",
     "x11_capture",
     "libei_capture",
@@ -82,7 +82,7 @@ default = [
     "rdp_emulation",
     "x11_emulation",
 ]
-gtk = ["dep:lan-mouse-gtk"]
+egui = ["dep:lan-mouse-egui"]
 layer_shell_capture = ["input-capture/layer_shell"]
 x11_capture = ["input-capture/x11"]
 libei_capture = ["input-event/libei", "input-capture/libei"]

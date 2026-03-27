@@ -24,6 +24,10 @@ use webrtc_dtls::{
 };
 use webrtc_util::Conn;
 
+// Keep DTLS datagrams comfortably below common path MTU limits.
+// This avoids Windows WSAEMSGSIZE (os error 10040) on some adapters/VPNs.
+const DTLS_MTU: usize = 1000;
+
 #[derive(Debug, Error)]
 pub(crate) enum LanMouseConnectionError {
     #[error(transparent)]
@@ -58,6 +62,7 @@ async fn connect(
         server_name: "ignored".to_owned(),
         insecure_skip_verify: true,
         extended_master_secret: ExtendedMasterSecretType::Require,
+        mtu: DTLS_MTU,
         ..Default::default()
     };
     let timeout = tokio::time::sleep(DEFAULT_CONNECTION_TIMEOUT);

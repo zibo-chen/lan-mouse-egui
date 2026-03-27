@@ -24,6 +24,10 @@ use webrtc_util::{Conn, Error, conn::Listener};
 
 use crate::crypto;
 
+// Keep DTLS datagrams comfortably below common path MTU limits.
+// This avoids Windows WSAEMSGSIZE (os error 10040) on some adapters/VPNs.
+const DTLS_MTU: usize = 1000;
+
 #[derive(Error, Debug)]
 pub enum ListenerCreationError {
     #[error(transparent)]
@@ -106,6 +110,7 @@ impl LanMouseListener {
             extended_master_secret: ExtendedMasterSecretType::Require,
             client_auth: RequireAnyClientCert,
             verify_peer_certificate,
+            mtu: DTLS_MTU,
             ..Default::default()
         };
 

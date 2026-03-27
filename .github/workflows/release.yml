@@ -25,7 +25,6 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install libx11-dev libxtst-dev
-        sudo apt-get install libadwaita-1-dev libgtk-4-dev
     - name: Release Build
       run: |
         cargo build --release
@@ -44,7 +43,6 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install libx11-dev libxtst-dev
-        sudo apt-get install libadwaita-1-dev libgtk-4-dev
     - name: Release Build
       run: |
         cargo build --release
@@ -58,47 +56,12 @@ jobs:
   windows-release-build:
     runs-on: windows-latest
     steps:
-    - uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-    # needed for cache restore
-    - name: create gtk dir
-      run: mkdir C:\gtk-build\gtk\x64\release
-    - uses: actions/cache@v3
-      id: cache
-      with:
-        path: c:/gtk-build/gtk/x64/release/**
-        key: gtk-windows-build
-        restore-keys: gtk-windows-build
-    - name: Update path
-      run: |
-        echo "PKG_CONFIG=C:\gtk-build\gtk\x64\release\bin\pkgconf.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        echo "C:\pkg-config-lite-0.28-1\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-        echo "C:\gtk-build\gtk\x64\release\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-        echo $env:GITHUB_PATH
-        echo $env:PATH
-    - name: Install dependencies
-      if: steps.cache.outputs.cache-hit != 'true'
-      run: |
-        # choco install msys2
-        # choco install visualstudio2022-workload-vctools
-        # choco install pkgconfiglite
-        py -m venv .venv
-        .venv\Scripts\activate.ps1
-        py -m pip install gvsbuild
-        # see https://github.com/wingtk/gvsbuild/pull/1004
-        Move-Item "C:\Program Files\Git\usr\bin" "C:\Program Files\Git\usr\notbin"
-        Move-Item "C:\Program Files\Git\bin" "C:\Program Files\Git\notbin"
-        gvsbuild build --msys-dir=C:\msys64 gtk4 libadwaita librsvg
-        Move-Item "C:\Program Files\Git\usr\notbin" "C:\Program Files\Git\usr\bin"
-        Move-Item "C:\Program Files\Git\notbin" "C:\Program Files\Git\bin"
     - uses: actions/checkout@v6
     - name: Release Build
       run: cargo build --release
     - name: Create Archive
       run: |
         mkdir "lan-mouse-windows"
-        Get-Childitem -Path "C:\\gtk-build\\gtk\\x64\\release\\bin\\*.dll" -File -Recurse | Copy-Item -Destination "lan-mouse-windows"
         Copy-Item -Path "target\release\lan-mouse.exe" -Destination "lan-mouse-windows"
         Compress-Archive -Path "lan-mouse-windows\*" -DestinationPath lan-mouse-windows-x86_64.zip
     - name: Upload build artifact
@@ -113,8 +76,7 @@ jobs:
     - uses: actions/checkout@v6
     - name: install dependencies
       run: |
-        brew install --cask inkscape
-        brew install gtk4 libadwaita imagemagick librsvg
+        brew install imagemagick librsvg
     - name: Release Build
       run: |
         cargo build --release
@@ -124,9 +86,7 @@ jobs:
     - name: Install cargo bundle
       run: cargo install cargo-bundle
     - name: Bundle
-      run: |
-        cargo bundle --release
-        scripts/copy-macos-dylib.sh "target/release/bundle/osx/Lan Mouse.app/Contents/MacOS/lan-mouse"
+      run: cargo bundle --release
     - name: Zip bundle
       run: |
         cd target/release/bundle/osx
@@ -143,8 +103,7 @@ jobs:
     - uses: actions/checkout@v6
     - name: install dependencies
       run: |
-        brew install --cask inkscape
-        brew install gtk4 libadwaita imagemagick librsvg
+        brew install imagemagick librsvg
     - name: Release Build
       run: |
         cargo build --release
@@ -154,9 +113,7 @@ jobs:
     - name: Install cargo bundle
       run: cargo install cargo-bundle
     - name: Bundle
-      run: |
-        cargo bundle --release
-        scripts/copy-macos-dylib.sh "target/release/bundle/osx/Lan Mouse.app/Contents/MacOS/lan-mouse"
+      run: cargo bundle --release
     - name: Zip bundle
       run: |
         cd target/release/bundle/osx

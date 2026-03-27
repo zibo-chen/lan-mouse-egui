@@ -1,0 +1,68 @@
+name: Egui App Builds
+
+on:
+  push:
+    branches: [ "**" ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-egui-app:
+    name: Windows egui app
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binary
+        run: cargo build --release
+      - name: Create archive
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Copy-Item -Path "target\release\lan-mouse.exe" -Destination "dist\lan-mouse.exe"
+          Compress-Archive -Path "dist\*" -DestinationPath "lan-mouse-egui-windows-x86_64.zip"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: lan-mouse-egui-windows-x86_64
+          path: lan-mouse-egui-windows-x86_64.zip
+
+  macos-egui-app:
+    name: macOS egui app (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            name: arm64
+            artifact: lan-mouse-egui-macos-arm64
+          - os: macos-15-intel
+            name: intel
+            artifact: lan-mouse-egui-macos-intel
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+      - name: Install packaging dependencies
+        run: |
+          brew install imagemagick librsvg
+          cargo install cargo-bundle
+      - name: Create app icon
+        run: scripts/makeicns.sh
+      - name: Bundle app
+        run: cargo bundle --release
+      - name: Zip app bundle
+        run: |
+          cd target/release/bundle/osx
+          zip -r "${{ matrix.artifact }}.zip" "Lan Mouse.app"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact }}
+          path: target/release/bundle/osx/${{ matrix.artifact }}.zip
