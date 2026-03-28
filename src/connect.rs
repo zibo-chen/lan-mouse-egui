@@ -1,6 +1,6 @@
 use crate::client::ClientManager;
-use lan_mouse_ipc::{ClientHandle, DEFAULT_PORT};
-use lan_mouse_proto::{MAX_EVENT_SIZE, ProtoEvent};
+use lan_mouse_ipc::{ClientHandle, DEFAULT_PORT, DisplayInfo as IpcDisplayInfo};
+use lan_mouse_proto::{DisplayInfo as ProtoDisplayInfo, MAX_EVENT_SIZE, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use std::{
     cell::RefCell,
@@ -101,9 +101,14 @@ pub(crate) struct LanMouseConnection {
     client_manager: ClientManager,
     conns: Rc<Mutex<HashMap<SocketAddr, Arc<dyn Conn + Send + Sync>>>>,
     connecting: Rc<Mutex<HashSet<ClientHandle>>>,
-    recv_rx: Receiver<(ClientHandle, ProtoEvent)>,
-    recv_tx: Sender<(ClientHandle, ProtoEvent)>,
+    recv_rx: Receiver<ConnectionEvent>,
+    recv_tx: Sender<ConnectionEvent>,
     ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
+}
+
+pub(crate) enum ConnectionEvent {
+    Proto(ClientHandle, ProtoEvent),
+    StateChanged(ClientHandle),
 }
 
 impl LanMouseConnection {
@@ -120,7 +125,7 @@ impl LanMouseConnection {
         }
     }
 
-    pub(crate) async fn recv(&mut self) -> (ClientHandle, ProtoEvent) {
+    pub(crate) async fn recv(&mut self) -> ConnectionEvent {
         self.recv_rx.recv().await.expect("channel closed")
     }
 
@@ -129,6 +134,7 @@ impl LanMouseConnection {
         event: ProtoEvent,
         handle: ClientHandle,
     ) -> Result<(), LanMouseConnectionError> {
+        let event_label = format!("{event}");
         let (buf, len): ([u8; MAX_EVENT_SIZE], usize) = event.into();
         let buf = &buf[..len];
         if let Some(addr) = self.client_manager.active_addr(handle) {
@@ -147,7 +153,7 @@ impl LanMouseConnection {
                         disconnect(&self.client_manager, handle, addr, &self.conns).await;
                     }
                 }
-                log::trace!("{event} >->->->->- {addr}");
+                log::trace!("{event_label} >->->->->- {addr}");
                 return Ok(());
             }
         }
@@ -177,7 +183,7 @@ async fn connect_to_handle(
     handle: ClientHandle,
     conns: Rc<Mutex<HashMap<SocketAddr, Arc<dyn Conn + Send + Sync>>>>,
     connecting: Rc<Mutex<HashSet<ClientHandle>>>,
-    tx: Sender<(ClientHandle, ProtoEvent)>,
+    tx: Sender<ConnectionEvent>,
     ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
 ) -> Result<(), LanMouseConnectionError> {
     log::info!("client {handle} connecting ...");
@@ -199,6 +205,8 @@ async fn connect_to_handle(
         };
         log::info!("client ({handle}) connected @ {addr}");
         client_manager.set_active_addr(handle, Some(addr));
+        tx.send(ConnectionEvent::StateChanged(handle))
+            .expect("channel closed");
         conns.lock().await.insert(addr, conn.clone());
         connecting.lock().await.remove(&handle);
 
@@ -255,7 +263,7 @@ async fn receive_loop(
     addr: SocketAddr,
     conn: Arc<dyn Conn + Send + Sync>,
     conns: Rc<Mutex<HashMap<SocketAddr, Arc<dyn Conn + Send + Sync>>>>,
-    tx: Sender<(ClientHandle, ProtoEvent)>,
+    tx: Sender<ConnectionEvent>,
     ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
 ) {
     let mut buf = [0u8; MAX_EVENT_SIZE];
@@ -263,12 +271,20 @@ async fn receive_loop(
         if let Ok(event) = buf.try_into() {
             log::trace!("{addr} <==<==<== {event}");
             match event {
-                ProtoEvent::Pong(b) => {
+                ProtoEvent::Pong(payload) => {
                     client_manager.set_active_addr(handle, Some(addr));
-                    client_manager.set_alive(handle, b);
+                    client_manager.set_alive(handle, payload.alive);
+                    client_manager.set_screens(
+                        handle,
+                        payload.screens.into_iter().map(to_ipc_display).collect(),
+                    );
                     ping_response.borrow_mut().insert(addr);
+                    tx.send(ConnectionEvent::StateChanged(handle))
+                        .expect("channel closed");
                 }
-                event => tx.send((handle, event)).expect("channel closed"),
+                event => tx
+                    .send(ConnectionEvent::Proto(handle, event))
+                    .expect("channel closed"),
             }
         }
     }
@@ -287,4 +303,15 @@ async fn disconnect(
     client_manager.set_active_addr(handle, None);
     let active: Vec<SocketAddr> = conns.lock().await.keys().copied().collect();
     log::info!("active connections: {active:?}");
+}
+
+fn to_ipc_display(display: ProtoDisplayInfo) -> IpcDisplayInfo {
+    IpcDisplayInfo {
+        name: display.name,
+        x: display.x,
+        y: display.y,
+        width: display.width,
+        height: display.height,
+        primary: display.primary,
+    }
 }

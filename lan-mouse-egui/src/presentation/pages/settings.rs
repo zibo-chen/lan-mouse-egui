@@ -14,17 +14,20 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut egui::Ui) {
     let theme = &app.theme().clone();
     let text = app.text();
 
+    let total_w = ui.available_width();
+    let half = (total_w - 8.0) / 2.0;
+
     ui.horizontal_top(|ui| {
-        let half = (ui.available_width() - 14.0) / 2.0;
+        // Appearance
         ui.allocate_ui(Vec2::new(half, 0.0), |ui| {
             elevated_frame(theme).show(ui, |ui| {
                 card_title(ui, text.label_desktop, theme);
-                ui.add_space(10.0);
+                ui.add_space(4.0);
 
                 field_label(ui, text.label_theme_family, theme);
                 ComboBox::from_id_salt("theme-family")
                     .selected_text(text.theme_family(app.preferences.theme_family))
-                    .width(220.0)
+                    .width(180.0)
                     .show_ui(ui, |ui| {
                         for family in ThemeFamily::ALL {
                             ui.selectable_value(
@@ -34,12 +37,12 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut egui::Ui) {
                             );
                         }
                     });
-                ui.add_space(8.0);
+                ui.add_space(4.0);
 
                 field_label(ui, text.label_appearance, theme);
                 ComboBox::from_id_salt("theme-mode")
                     .selected_text(text.theme_mode(app.preferences.theme_mode))
-                    .width(220.0)
+                    .width(180.0)
                     .show_ui(ui, |ui| {
                         for mode in ThemeModeChoice::ALL {
                             ui.selectable_value(
@@ -49,12 +52,12 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut egui::Ui) {
                             );
                         }
                     });
-                ui.add_space(8.0);
+                ui.add_space(4.0);
 
                 field_label(ui, text.label_language, theme);
-                ComboBox::from_id_salt("language-choice")
+                ComboBox::from_id_salt("lang")
                     .selected_text(text.language_choice(app.preferences.language))
-                    .width(220.0)
+                    .width(180.0)
                     .show_ui(ui, |ui| {
                         for choice in LanguageChoice::ALL {
                             ui.selectable_value(
@@ -64,25 +67,26 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut egui::Ui) {
                             );
                         }
                     });
-                ui.add_space(10.0);
-                help_text(ui, text.app_tagline, theme);
             });
         });
-        ui.add_space(14.0);
+
+        ui.add_space(8.0);
+
+        // Network
         ui.allocate_ui(Vec2::new(half, 0.0), |ui| {
             elevated_frame(theme).show(ui, |ui| {
                 card_title(ui, text.label_network, theme);
-                ui.add_space(10.0);
+                ui.add_space(4.0);
 
                 field_label(ui, text.label_port, theme);
                 ui.horizontal(|ui| {
                     ui.add(
                         TextEdit::singleline(&mut app.workspace.port_input)
-                            .desired_width(120.0)
+                            .desired_width(100.0)
                             .hint_text(DEFAULT_PORT.to_string()),
                     );
-                    let parsed_port = parse_port_input(&app.workspace.port_input);
-                    let changed = parsed_port != app.workspace.port;
+                    let parsed = parse_port_input(&app.workspace.port_input);
+                    let changed = parsed != app.workspace.port;
                     if ui
                         .add_enabled(
                             changed,
@@ -90,7 +94,7 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut egui::Ui) {
                         )
                         .clicked()
                     {
-                        app.send_request(FrontendRequest::ChangePort(parsed_port));
+                        app.send_request(FrontendRequest::ChangePort(parsed));
                     }
                     if ui
                         .add_enabled(
@@ -102,16 +106,16 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut egui::Ui) {
                         app.workspace.port_input = port_to_input(app.workspace.port);
                     }
                 });
-                ui.add_space(8.0);
+                ui.add_space(4.0);
                 help_text(
                     ui,
                     &format!("{} {}", text.default_port_hint, DEFAULT_PORT),
                     theme,
                 );
-                ui.add_space(12.0);
+                ui.add_space(6.0);
                 tinted_frame(theme).show(ui, |ui| {
                     card_title(ui, text.label_background_behavior, theme);
-                    ui.add_space(6.0);
+                    ui.add_space(2.0);
                     help_text(
                         ui,
                         if app.has_tray() {
@@ -126,10 +130,12 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut egui::Ui) {
         });
     });
 
-    ui.add_space(14.0);
+    ui.add_space(8.0);
+
+    // Service controls
     elevated_frame(theme).show(ui, |ui| {
         card_title(ui, text.label_service_controls, theme);
-        ui.add_space(10.0);
+        ui.add_space(4.0);
         service_row(
             app,
             ui,
@@ -137,7 +143,7 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut egui::Ui) {
             app.workspace.capture_status == Status::Enabled,
             FrontendRequest::EnableCapture,
         );
-        ui.add_space(10.0);
+        ui.add_space(4.0);
         service_row(
             app,
             ui,

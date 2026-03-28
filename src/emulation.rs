@@ -6,7 +6,7 @@ use crate::{
 use futures::StreamExt;
 use input_emulation::{EmulationHandle, InputEmulation, InputEmulationError};
 use input_event::Event;
-use lan_mouse_proto::{Position, ProtoEvent};
+use lan_mouse_proto::{DisplayInfo as ProtoDisplayInfo, PongPayload, Position, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use std::{
     cell::Cell,
@@ -154,7 +154,15 @@ impl ListenTask {
                                 self.listener.reply(addr, ProtoEvent::Ack(0)).await;
                             }
                             ProtoEvent::Input(event) => self.emulation_proxy.consume(event, addr),
-                            ProtoEvent::Ping => self.listener.reply(addr, ProtoEvent::Pong(self.emulation_proxy.emulation_active.get())).await,
+                            ProtoEvent::Ping => {
+                                self.listener.reply(
+                                    addr,
+                                    ProtoEvent::Pong(PongPayload {
+                                        alive: self.emulation_proxy.emulation_active.get(),
+                                        screens: current_proto_displays(),
+                                    }),
+                                ).await
+                            }
                             _ => {}
                         }
                     }
@@ -411,6 +419,20 @@ fn to_ipc_pos(pos: Position) -> lan_mouse_ipc::Position {
         Position::Top => lan_mouse_ipc::Position::Top,
         Position::Bottom => lan_mouse_ipc::Position::Bottom,
     }
+}
+
+fn current_proto_displays() -> Vec<ProtoDisplayInfo> {
+    input_capture::current_displays()
+        .into_iter()
+        .map(|display| ProtoDisplayInfo {
+            name: display.name,
+            x: display.x,
+            y: display.y,
+            width: display.width,
+            height: display.height,
+            primary: display.primary,
+        })
+        .collect()
 }
 
 async fn wait_for_termination(rx: &mut Receiver<ProxyRequest>) {

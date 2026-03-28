@@ -125,6 +125,16 @@ pub struct InputProfile {
     pub scroll_scale_y: f32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct DisplayInfo {
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub primary: bool,
+}
+
 impl Default for InputProfile {
     fn default() -> Self {
         Self {
@@ -258,6 +268,8 @@ pub struct ClientState {
     pub has_pressed_keys: bool,
     /// dns resolving in progress
     pub resolving: bool,
+    /// display topology announced by the peer device
+    pub screens: Vec<DisplayInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -274,6 +286,8 @@ pub enum FrontendEvent {
     PortChanged(u16, Option<String>),
     /// list of all clients, used for initial state synchronization
     Enumerate(Vec<(ClientHandle, ClientConfig, ClientState)>),
+    /// local display topology changed
+    LocalDisplaysChanged(Vec<DisplayInfo>),
     /// an error occured
     Error(String),
     /// capture status

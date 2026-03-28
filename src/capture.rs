@@ -14,7 +14,7 @@ use local_channel::mpsc::{Receiver, Sender, channel};
 use tokio::task::{JoinHandle, spawn_local};
 use tokio_util::sync::CancellationToken;
 
-use crate::connect::LanMouseConnection;
+use crate::connect::{ConnectionEvent, LanMouseConnection};
 
 pub(crate) struct Capture {
     cancellation_token: CancellationToken,
@@ -37,6 +37,8 @@ pub(crate) enum ICaptureEvent {
     /// either the remote client leaving its device region,
     /// a new device entering the screen or the release bind.
     ClientEntered(u64),
+    /// remote client metadata changed and should be rebroadcast to the frontend.
+    RemoteStateChanged(u64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -261,27 +263,36 @@ impl CaptureTask {
                     Some(event) => self.handle_capture_event(capture, event?).await?,
                     None => return Ok(()),
                 },
-                (handle, event) = self.conn.recv() => {
-                    if let Some(active) = self.active_client {
-                        if handle != active {
-                            // we only care about events coming from the client we are currently connected to
-                            // only `Ack` and `Leave` are relevant
-                            continue
+                conn_event = self.conn.recv() => {
+                    match conn_event {
+                        ConnectionEvent::StateChanged(handle) => {
+                            self.event_tx
+                                .send(ICaptureEvent::RemoteStateChanged(handle))
+                                .expect("channel closed");
                         }
-                    }
+                        ConnectionEvent::Proto(handle, event) => {
+                            if let Some(active) = self.active_client {
+                                if handle != active {
+                                    // we only care about events coming from the client we are currently connected to
+                                    // only `Ack` and `Leave` are relevant
+                                    continue
+                                }
+                            }
 
-                    match event {
-                        // connection acknowlegded => set state to Sending
-                        ProtoEvent::Ack(_) => {
-                            log::info!("client {handle} acknowledged the connection!");
-                            self.state = State::Sending;
+                            match event {
+                                // connection acknowlegded => set state to Sending
+                                ProtoEvent::Ack(_) => {
+                                    log::info!("client {handle} acknowledged the connection!");
+                                    self.state = State::Sending;
+                                }
+                                // client disconnected
+                                ProtoEvent::Leave(_) => {
+                                    log::info!("releasing capture: left remote client device region");
+                                    self.release_capture(capture).await?;
+                                },
+                                _ => {}
+                            }
                         }
-                        // client disconnected
-                        ProtoEvent::Leave(_) => {
-                            log::info!("releasing capture: left remote client device region");
-                            self.release_capture(capture).await?;
-                        },
-                        _ => {}
                     }
                 },
                 e = self.request_rx.recv() => match e.expect("channel closed") {

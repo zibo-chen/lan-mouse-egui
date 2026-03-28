@@ -31,7 +31,7 @@ use input_event::{
     scancode::{self, Linux},
 };
 
-use super::{CaptureEvent, Position, display_util};
+use super::{CaptureEvent, DisplayInfo, Position, display_util};
 
 pub(crate) struct EventThread {
     request_buffer: Arc<Mutex<Vec<ClientUpdate>>>,
@@ -419,6 +419,54 @@ fn enumerate_displays(display_rects: &mut Vec<RECT>) {
             });
         }
     }
+}
+
+pub(crate) fn current_displays() -> Vec<DisplayInfo> {
+    let mut displays = Vec::new();
+    unsafe {
+        for index in 0.. {
+            let mut device: DISPLAY_DEVICEW = std::mem::zeroed();
+            device.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as u32;
+            let ret = EnumDisplayDevicesW(None, index, &mut device, EDD_GET_DEVICE_INTERFACE_NAME);
+            if ret == FALSE {
+                break;
+            }
+            if !device
+                .StateFlags
+                .contains(DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)
+            {
+                continue;
+            }
+
+            let mut dev_mode: DEVMODEW = std::mem::zeroed();
+            dev_mode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+            let ret = EnumDisplaySettingsW(
+                PCWSTR::from_raw(&device.DeviceName as *const _),
+                ENUM_CURRENT_SETTINGS,
+                &mut dev_mode,
+            );
+            if ret == FALSE {
+                continue;
+            }
+
+            let pos = dev_mode.Anonymous1.Anonymous2.dmPosition;
+            let name_end = device
+                .DeviceString
+                .iter()
+                .position(|&value| value == 0)
+                .unwrap_or(device.DeviceString.len());
+
+            displays.push(DisplayInfo {
+                name: String::from_utf16_lossy(&device.DeviceString[..name_end]),
+                x: pos.x,
+                y: pos.y,
+                width: dev_mode.dmPelsWidth,
+                height: dev_mode.dmPelsHeight,
+                primary: (device.StateFlags.0 & 0x4) != 0,
+            });
+        }
+    }
+    displays
 }
 
 fn update_clients(request: ClientUpdate) {

@@ -8,8 +8,8 @@ use lan_mouse_ipc::{ClientHandle, ConnectionError, FrontendEvent, FrontendReques
 
 use crate::{
     domain::{
-        ActiveTheme, Catalog, ClientViewModel, DialogState, FingerprintForm, Language, Toast,
-        UiPreferences, WorkspaceState, apply_theme, catalog, port_to_input, resolve_theme,
+        ActiveTheme, Catalog, ClientViewModel, DialogState, FingerprintForm, Language, LayoutState,
+        Toast, UiPreferences, WorkspaceState, apply_theme, catalog, port_to_input, resolve_theme,
     },
     infrastructure::{BackendConnection, SystemTray, TrayEvent},
     presentation::shell,
@@ -21,6 +21,7 @@ pub struct LanMouseDesktopApp {
     pub(crate) workspace: WorkspaceState,
     pub(crate) preferences: UiPreferences,
     pub(crate) dialogs: DialogState,
+    pub(crate) layout: LayoutState,
     pub(crate) selected_client: Option<ClientHandle>,
     pub(crate) toasts: Vec<Toast>,
     pub(crate) window_visible: bool,
@@ -54,12 +55,16 @@ impl LanMouseDesktopApp {
             }
         };
 
+        let mut layout = LayoutState::default();
+        layout.rebuild_from_workspace(&workspace);
+
         Ok(Self {
             backend,
             tray,
             workspace,
             preferences,
             dialogs: DialogState::default(),
+            layout,
             selected_client: None,
             toasts: Vec::new(),
             window_visible: true,
@@ -162,6 +167,7 @@ impl LanMouseDesktopApp {
     }
 
     fn poll_events(&mut self) {
+        let mut layout_needs_rebuild = false;
         for event in self.backend.drain_events() {
             match event {
                 FrontendEvent::Created(handle, config, state) => {
@@ -169,9 +175,11 @@ impl LanMouseDesktopApp {
                         .clients
                         .insert(handle, ClientViewModel::new(handle, config, state));
                     self.selected_client = Some(handle);
+                    layout_needs_rebuild = true;
                 }
                 FrontendEvent::Deleted(handle) => {
                     self.workspace.clients.remove(&handle);
+                    layout_needs_rebuild = true;
                 }
                 FrontendEvent::State(handle, config, state) => {
                     if let Some(client) = self.workspace.clients.get_mut(&handle) {
@@ -182,13 +190,20 @@ impl LanMouseDesktopApp {
                             .clients
                             .insert(handle, ClientViewModel::new(handle, config, state));
                     }
+                    layout_needs_rebuild = true;
                 }
                 FrontendEvent::Enumerate(clients) => {
+                    self.workspace.clients.clear();
                     for (handle, config, state) in clients {
                         self.workspace
                             .clients
                             .insert(handle, ClientViewModel::new(handle, config, state));
                     }
+                    layout_needs_rebuild = true;
+                }
+                FrontendEvent::LocalDisplaysChanged(displays) => {
+                    self.workspace.local_screens = displays;
+                    layout_needs_rebuild = true;
                 }
                 FrontendEvent::PortChanged(port, message) => {
                     self.workspace.port = port;
@@ -250,6 +265,18 @@ impl LanMouseDesktopApp {
         }
 
         self.ensure_selected_client();
+
+        // Keep layout screen list in sync with clients
+        let expected_count = self.workspace.local_screens.len()
+            + self
+                .workspace
+                .clients
+                .values()
+                .map(|client| client.screens.len())
+                .sum::<usize>();
+        if layout_needs_rebuild || self.layout.screen_count() != expected_count {
+            self.layout.rebuild_from_workspace(&self.workspace);
+        }
     }
 
     fn poll_tray_events(&mut self, ctx: &Context) {

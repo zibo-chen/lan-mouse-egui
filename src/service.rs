@@ -11,8 +11,8 @@ use crate::{
 use futures::StreamExt;
 use hickory_resolver::ResolveError;
 use lan_mouse_ipc::{
-    AsyncFrontendListener, ClientConfig, ClientHandle, ClientState, FrontendEvent, FrontendRequest,
-    IpcError, IpcListenerCreationError, Position, Status,
+    AsyncFrontendListener, ClientConfig, ClientHandle, ClientState, DisplayInfo, FrontendEvent,
+    FrontendRequest, IpcError, IpcListenerCreationError, Position, Status,
 };
 use log;
 use std::{
@@ -55,6 +55,8 @@ pub struct Service {
     client_manager: ClientManager,
     /// current port
     port: u16,
+    /// local display topology for the host device
+    local_screens: Vec<DisplayInfo>,
     /// the public key fingerprint for (D)TLS
     public_key_fingerprint: String,
     /// notify for pending frontend events
@@ -107,6 +109,10 @@ impl Service {
 
         // create frontend communication adapter, exit if already running
         let frontend_listener = AsyncFrontendListener::new().await?;
+        let local_screens = input_capture::current_displays()
+            .into_iter()
+            .map(to_ipc_display)
+            .collect();
 
         let authorized_keys = Arc::new(RwLock::new(config.authorized_fingerprints()));
         // listener + connection
@@ -135,6 +141,7 @@ impl Service {
             client_manager,
             frontend_event_pending: Default::default(),
             port,
+            local_screens,
             pending_frontend_events: Default::default(),
             capture_status: Default::default(),
             emulation_status: Default::default(),
@@ -337,6 +344,9 @@ impl Service {
                 log::info!("entering client {handle} ...");
                 self.spawn_hook_command(handle);
             }
+            ICaptureEvent::RemoteStateChanged(handle) => {
+                self.broadcast_client(handle);
+            }
         }
     }
 
@@ -367,6 +377,9 @@ impl Service {
 
     fn sync_frontend(&mut self) {
         self.enumerate();
+        self.notify_frontend(FrontendEvent::LocalDisplaysChanged(
+            self.local_screens.clone(),
+        ));
         self.notify_frontend(FrontendEvent::EmulationStatus(self.emulation_status));
         self.notify_frontend(FrontendEvent::CaptureStatus(self.capture_status));
         self.notify_frontend(FrontendEvent::PortChanged(self.port, None));
@@ -601,5 +614,16 @@ impl Service {
                 Err(e) => log::warn!("{cmd}: {e}"),
             }
         });
+    }
+}
+
+fn to_ipc_display(display: input_capture::DisplayInfo) -> DisplayInfo {
+    DisplayInfo {
+        name: display.name,
+        x: display.x,
+        y: display.y,
+        width: display.width,
+        height: display.height,
+        primary: display.primary,
     }
 }

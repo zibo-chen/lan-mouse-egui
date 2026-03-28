@@ -13,8 +13,11 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut egui::Ui, ctx: &egui::Conte
     let theme = &app.theme().clone();
     let text = app.text();
 
+    let total_w = ui.available_width();
+    let half = (total_w - 8.0) / 2.0;
+
     ui.horizontal_top(|ui| {
-        let half = (ui.available_width() - 14.0) / 2.0;
+        // Identity card
         ui.allocate_ui(Vec2::new(half, 0.0), |ui| {
             elevated_frame(theme).show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -36,7 +39,7 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut egui::Ui, ctx: &egui::Conte
                         }
                     });
                 });
-                ui.add_space(10.0);
+                ui.add_space(4.0);
                 if app.workspace.public_key_fingerprint.is_empty() {
                     help_text(ui, text.fingerprint_pending, theme);
                 } else {
@@ -44,7 +47,10 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut egui::Ui, ctx: &egui::Conte
                 }
             });
         });
-        ui.add_space(14.0);
+
+        ui.add_space(8.0);
+
+        // Allowlist card
         ui.allocate_ui(Vec2::new(half, 0.0), |ui| {
             elevated_frame(theme).show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -62,12 +68,11 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut egui::Ui, ctx: &egui::Conte
                         }
                     });
                 });
-                ui.add_space(10.0);
+                ui.add_space(4.0);
                 help_text(ui, text.recent_security_hint, theme);
-                ui.add_space(10.0);
                 ui.label(
                     egui::RichText::new(format!(
-                        "{} {}",
+                        "{}: {}",
                         text.label_trusted_devices,
                         app.workspace.trusted_devices()
                     ))
@@ -78,44 +83,47 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut egui::Ui, ctx: &egui::Conte
         });
     });
 
-    ui.add_space(14.0);
+    ui.add_space(8.0);
+
     if app.workspace.authorized_keys.is_empty() {
         empty_state(ui, text.empty_security, text.empty_security_hint, theme);
         return;
     }
 
-    let keys = app
+    let keys: Vec<_> = app
         .workspace
         .authorized_keys
         .iter()
-        .map(|(fingerprint, description)| (fingerprint.clone(), description.clone()))
-        .collect::<Vec<_>>();
+        .map(|(f, d)| (f.clone(), d.clone()))
+        .collect();
 
     for (fingerprint, description) in keys {
         elevated_frame(theme).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.allocate_ui_with_layout(
-                    Vec2::new((ui.available_width() - 120.0).max(200.0), 0.0),
-                    Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        ui.label(
-                            egui::RichText::new(description)
-                                .strong()
-                                .color(theme.palette.text_primary),
-                        );
-                        fingerprint_block(ui, &fingerprint, theme);
-                    },
-                );
-                ui.with_layout(Layout::top_down_justified(egui::Align::Center), |ui| {
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new(&description)
+                            .strong()
+                            .color(theme.palette.text_primary),
+                    );
+                    fingerprint_block(ui, &fingerprint, theme);
+                });
+                ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .add(action_button(text.action_remove, ButtonKind::Danger, theme))
+                        .add(action_button(
+                            text.action_remove,
+                            ButtonKind::Danger,
+                            theme,
+                        ))
                         .clicked()
                     {
-                        app.send_request(FrontendRequest::RemoveAuthorizedKey(fingerprint.clone()));
+                        app.send_request(FrontendRequest::RemoveAuthorizedKey(
+                            fingerprint.clone(),
+                        ));
                     }
                 });
             });
         });
-        ui.add_space(10.0);
+        ui.add_space(4.0);
     }
 }

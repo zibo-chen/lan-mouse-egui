@@ -7,10 +7,9 @@ use std::{
 };
 use thiserror::Error;
 
-/// defines the maximum size an encoded event can take up
-/// this is currently the pointer motion event
-/// type: u8, time: u32, dx: f64, dy: f64
-pub const MAX_EVENT_SIZE: usize = size_of::<u8>() + size_of::<u32>() + 2 * size_of::<f64>();
+/// defines the maximum size an encoded event can take up.
+/// keep this below the DTLS MTU used by the transport.
+pub const MAX_EVENT_SIZE: usize = 896;
 
 /// error type for protocol violations
 #[derive(Debug, Error)]
@@ -21,6 +20,22 @@ pub enum ProtocolError {
     /// position type does not exist
     #[error("invalid event id: `{0}`")]
     InvalidPosition(#[from] TryFromPrimitiveError<Position>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DisplayInfo {
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub primary: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PongPayload {
+    pub alive: bool,
+    pub screens: Vec<DisplayInfo>,
 }
 
 /// Position of a client
@@ -46,7 +61,7 @@ impl Display for Position {
 }
 
 /// main lan-mouse protocol event type
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum ProtoEvent {
     /// notify a client that the cursor entered its region at the given position
     /// [`ProtoEvent::Ack`] with the same serial is used for synchronization between devices
@@ -61,8 +76,8 @@ pub enum ProtoEvent {
     /// Ping event for tracking unresponsive clients.
     /// A client has to respond with [`ProtoEvent::Pong`].
     Ping,
-    /// Response to [`ProtoEvent::Ping`], true if emulation is enabled / available
-    Pong(bool),
+    /// Response to [`ProtoEvent::Ping`], including availability and current displays.
+    Pong(PongPayload),
 }
 
 impl Display for ProtoEvent {
@@ -73,11 +88,12 @@ impl Display for ProtoEvent {
             ProtoEvent::Ack(s) => write!(f, "Ack({s})"),
             ProtoEvent::Input(e) => write!(f, "{e}"),
             ProtoEvent::Ping => write!(f, "ping"),
-            ProtoEvent::Pong(alive) => {
+            ProtoEvent::Pong(payload) => {
                 write!(
                     f,
-                    "pong: {}",
-                    if *alive { "alive" } else { "not available" }
+                    "pong: {} ({} displays)",
+                    if payload.alive { "alive" } else { "not available" },
+                    payload.screens.len()
                 )
             }
         }
@@ -170,7 +186,22 @@ impl TryFrom<[u8; MAX_EVENT_SIZE]> for ProtoEvent {
                 },
             ))),
             EventType::Ping => Ok(Self::Ping),
-            EventType::Pong => Ok(Self::Pong(decode_u8(&mut buf)? != 0)),
+            EventType::Pong => {
+                let alive = decode_u8(&mut buf)? != 0;
+                let count = decode_u8(&mut buf)? as usize;
+                let mut screens = Vec::with_capacity(count);
+                for _ in 0..count {
+                    screens.push(DisplayInfo {
+                        x: decode_i32(&mut buf)?,
+                        y: decode_i32(&mut buf)?,
+                        width: decode_u32(&mut buf)?,
+                        height: decode_u32(&mut buf)?,
+                        primary: decode_u8(&mut buf)? != 0,
+                        name: decode_string(&mut buf)?,
+                    });
+                }
+                Ok(Self::Pong(PongPayload { alive, screens }))
+            }
             EventType::Enter => Ok(Self::Enter(decode_u8(&mut buf)?.try_into()?)),
             EventType::Leave => Ok(Self::Leave(decode_u32(&mut buf)?)),
             EventType::Ack => Ok(Self::Ack(decode_u32(&mut buf)?)),
@@ -234,7 +265,19 @@ impl From<ProtoEvent> for ([u8; MAX_EVENT_SIZE], usize) {
                     },
                 },
                 ProtoEvent::Ping => {}
-                ProtoEvent::Pong(alive) => encode_u8(buf, len, alive as u8),
+                ProtoEvent::Pong(payload) => {
+                    encode_u8(buf, len, payload.alive as u8);
+                    let count = payload.screens.len().min(u8::MAX as usize) as u8;
+                    encode_u8(buf, len, count);
+                    for screen in payload.screens.into_iter().take(count as usize) {
+                        encode_i32(buf, len, screen.x);
+                        encode_i32(buf, len, screen.y);
+                        encode_u32(buf, len, screen.width);
+                        encode_u32(buf, len, screen.height);
+                        encode_u8(buf, len, screen.primary as u8);
+                        encode_string(buf, len, &screen.name);
+                    }
+                }
                 ProtoEvent::Enter(pos) => encode_u8(buf, len, pos as u8),
                 ProtoEvent::Leave(serial) => encode_u32(buf, len, serial),
                 ProtoEvent::Ack(serial) => encode_u32(buf, len, serial),
@@ -261,6 +304,13 @@ decode_impl!(u32);
 decode_impl!(i32);
 decode_impl!(f64);
 
+fn decode_string(data: &mut &[u8]) -> Result<String, ProtocolError> {
+    let len = decode_u8(data)? as usize;
+    let (bytes, rest) = data.split_at(len);
+    *data = rest;
+    Ok(String::from_utf8_lossy(bytes).into_owned())
+}
+
 macro_rules! encode_impl {
     ($t:ty) => {
         paste! {
@@ -280,3 +330,14 @@ encode_impl!(u8);
 encode_impl!(u32);
 encode_impl!(i32);
 encode_impl!(f64);
+
+fn encode_string(buf: &mut &mut [u8], amt: &mut usize, value: &str) {
+    let bytes = value.as_bytes();
+    let len = bytes.len().min(u8::MAX as usize);
+    encode_u8(buf, amt, len as u8);
+    let data = std::mem::take(buf);
+    let (dst, rest) = data.split_at_mut(len);
+    dst.copy_from_slice(&bytes[..len]);
+    *amt += len;
+    *buf = rest;
+}

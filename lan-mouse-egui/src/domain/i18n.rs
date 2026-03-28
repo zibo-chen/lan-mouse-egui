@@ -152,6 +152,18 @@ pub struct Catalog {
     pub topology_storage: &'static str,
     // Navigation icon labels
     pub nav_connection_mode: &'static str,
+    // Layout page
+    pub nav_layout: &'static str,
+    pub nav_layout_subtitle: &'static str,
+    pub label_screen_layout: &'static str,
+    pub label_detected_screens: &'static str,
+    pub label_snap_to_grid: &'static str,
+    pub label_show_grid: &'static str,
+    pub action_auto_arrange: &'static str,
+    pub label_primary: &'static str,
+    pub label_local_host: &'static str,
+    pub layout_status_devices: &'static str,
+    pub layout_status_screens: &'static str,
 }
 
 impl Catalog {
@@ -162,6 +174,7 @@ impl Catalog {
                 "Lan Mouse" => "Clients",
                 _ => "客户端",
             },
+            NavigationPage::Layout => self.nav_layout,
             NavigationPage::Security => match self.app_title {
                 "Lan Mouse" => "Security",
                 _ => "安全",
@@ -183,6 +196,7 @@ impl Catalog {
                 "Lan Mouse" => "Route remote machines and tune their behavior",
                 _ => "管理远程机器并调整它们的行为",
             },
+            NavigationPage::Layout => self.nav_layout_subtitle,
             NavigationPage::Security => match self.app_title {
                 "Lan Mouse" => "Trusted fingerprints and incoming authorization",
                 _ => "可信指纹与传入授权管理",
@@ -439,6 +453,17 @@ static ENGLISH: Catalog = Catalog {
     topology_remote: "Remote Desktop",
     topology_storage: "Storage",
     nav_connection_mode: "Connection Mode",
+    nav_layout: "Layout",
+    nav_layout_subtitle: "Drag screens to arrange mouse handoff between devices",
+    label_screen_layout: "Screen Layout Manager",
+    label_detected_screens: "Detected Screens",
+    label_snap_to_grid: "Snap to Grid",
+    label_show_grid: "Show Grid",
+    action_auto_arrange: "Auto Arrange",
+    label_primary: "Primary",
+    label_local_host: "Local Host",
+    layout_status_devices: "devices",
+    layout_status_screens: "screens",
 };
 
 static SIMPLIFIED_CHINESE: Catalog = Catalog {
@@ -562,6 +587,17 @@ static SIMPLIFIED_CHINESE: Catalog = Catalog {
     topology_remote: "远程台式机",
     topology_storage: "服务存储",
     nav_connection_mode: "连接模式",
+    nav_layout: "布局",
+    nav_layout_subtitle: "拖动屏幕安排设备之间的鼠标切换方式",
+    label_screen_layout: "屏幕布局管理",
+    label_detected_screens: "已检测屏幕",
+    label_snap_to_grid: "对齐网格",
+    label_show_grid: "显示网格",
+    action_auto_arrange: "自动排列",
+    label_primary: "主屏",
+    label_local_host: "本机",
+    layout_status_devices: "台设备",
+    layout_status_screens: "个屏幕",
 };
 
 #[cfg(test)]

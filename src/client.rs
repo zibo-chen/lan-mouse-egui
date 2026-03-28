@@ -268,6 +268,16 @@ impl ClientManager {
         }
     }
 
+    pub(crate) fn set_screens(
+        &self,
+        handle: ClientHandle,
+        screens: Vec<lan_mouse_ipc::DisplayInfo>,
+    ) {
+        if let Some((_, s)) = self.clients.borrow_mut().get_mut(handle as usize) {
+            s.screens = screens;
+        }
+    }
+
     pub(crate) fn active_addr(&self, handle: ClientHandle) -> Option<SocketAddr> {
         self.clients
             .borrow()

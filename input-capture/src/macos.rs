@@ -528,8 +528,8 @@ pub struct MacOSInputCapture {
 impl MacOSInputCapture {
     pub async fn new() -> Result<Self, MacosCaptureCreationError> {
         let state = Arc::new(Mutex::new(InputCaptureState::new()?));
-        let (event_tx, event_rx) = mpsc::channel(32);
-        let (notify_tx, mut notify_rx) = mpsc::channel(32);
+        let (event_tx, event_rx) = mpsc::channel(256);
+        let (notify_tx, mut notify_rx) = mpsc::channel(128);
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
         let (tap_exit_tx, mut tap_exit_rx) = oneshot::channel();
 

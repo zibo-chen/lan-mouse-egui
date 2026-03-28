@@ -98,6 +98,16 @@ pub enum Backend {
     Dummy,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplayInfo {
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub primary: bool,
+}
+
 impl Display for Backend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -202,6 +212,25 @@ impl InputCapture {
             };
         }
     }
+}
+
+pub fn current_displays() -> Vec<DisplayInfo> {
+    current_displays_impl()
+}
+
+#[cfg(windows)]
+fn current_displays_impl() -> Vec<DisplayInfo> {
+    windows::current_displays()
+}
+
+#[cfg(target_os = "macos")]
+fn current_displays_impl() -> Vec<DisplayInfo> {
+    macos::current_displays()
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn current_displays_impl() -> Vec<DisplayInfo> {
+    Vec::new()
 }
 
 impl Stream for InputCapture {

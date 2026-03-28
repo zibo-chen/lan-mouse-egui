@@ -231,17 +231,17 @@ pub fn resolve_theme(family: ThemeFamily, mode: ThemeModeChoice) -> ActiveTheme 
 
 pub fn apply_theme(ctx: &Context, theme: &ActiveTheme) {
     let mut style: Style = (*ctx.style()).clone();
-    style.spacing.item_spacing = vec2(12.0, 12.0);
-    style.spacing.button_padding = vec2(14.0, 10.0);
-    style.spacing.interact_size = vec2(44.0, 36.0);
-    style.spacing.indent = 18.0;
+    style.spacing.item_spacing = vec2(8.0, 4.0);
+    style.spacing.button_padding = vec2(8.0, 4.0);
+    style.spacing.interact_size = vec2(40.0, 24.0);
+    style.spacing.indent = 16.0;
     style.visuals = theme.visuals.clone();
-    style.visuals.window_corner_radius = CornerRadius::same(24);
-    style.visuals.menu_corner_radius = CornerRadius::same(18);
-    style.visuals.widgets.noninteractive.corner_radius = CornerRadius::same(16);
-    style.visuals.widgets.inactive.corner_radius = CornerRadius::same(16);
-    style.visuals.widgets.hovered.corner_radius = CornerRadius::same(16);
-    style.visuals.widgets.active.corner_radius = CornerRadius::same(16);
+    style.visuals.window_corner_radius = CornerRadius::same(12);
+    style.visuals.menu_corner_radius = CornerRadius::same(8);
+    style.visuals.widgets.noninteractive.corner_radius = CornerRadius::same(8);
+    style.visuals.widgets.inactive.corner_radius = CornerRadius::same(8);
+    style.visuals.widgets.hovered.corner_radius = CornerRadius::same(8);
+    style.visuals.widgets.active.corner_radius = CornerRadius::same(8);
     style.visuals.window_shadow = Shadow::NONE;
     ctx.set_style(style);
 }

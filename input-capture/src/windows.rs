@@ -7,7 +7,7 @@ use std::pin::Pin;
 use std::task::ready;
 use tokio::sync::mpsc::{Receiver, channel};
 
-use super::{Capture, CaptureError, CaptureEvent, Position};
+use super::{Capture, CaptureError, CaptureEvent, DisplayInfo, Position};
 
 mod display_util;
 mod event_thread;
@@ -41,7 +41,7 @@ impl Capture for WindowsInputCapture {
 
 impl WindowsInputCapture {
     pub(crate) fn new() -> Self {
-        let (event_tx, event_rx) = channel(10);
+        let (event_tx, event_rx) = channel(128);
         let event_thread = EventThread::new(event_tx);
         Self {
             event_thread,
@@ -58,4 +58,8 @@ impl Stream for WindowsInputCapture {
             Some(e) => Poll::Ready(Some(Ok(e))),
         }
     }
+}
+
+pub(crate) fn current_displays() -> Vec<DisplayInfo> {
+    event_thread::current_displays()
 }

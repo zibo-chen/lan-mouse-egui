@@ -207,8 +207,8 @@ impl LibeiInputCapture<'_> {
         let input_capture_ptr = input_capture.as_ref().get_ref() as *const InputCapture<'static>;
         let first_session = Some(create_session(unsafe { &*input_capture_ptr }).await?);
 
-        let (event_tx, event_rx) = mpsc::channel(1);
-        let (notify_capture, notify_rx) = mpsc::channel(1);
+        let (event_tx, event_rx) = mpsc::channel(128);
+        let (notify_capture, notify_rx) = mpsc::channel(64);
         let notify_release = Arc::new(Notify::new());
 
         let cancellation_token = CancellationToken::new();

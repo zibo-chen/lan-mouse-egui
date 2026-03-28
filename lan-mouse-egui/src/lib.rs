@@ -22,8 +22,8 @@ pub fn run() -> Result<(), EguiError> {
     let options = NativeOptions {
         viewport: ViewportBuilder::default()
             .with_title("Lan Mouse")
-            .with_inner_size([1380.0, 860.0])
-            .with_min_inner_size([1120.0, 720.0])
+            .with_inner_size([960.0, 640.0])
+            .with_min_inner_size([720.0, 480.0])
             .with_decorations(false),
         ..Default::default()
     };
