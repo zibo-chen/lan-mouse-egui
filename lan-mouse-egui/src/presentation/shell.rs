@@ -49,18 +49,23 @@ pub fn render(app: &mut LanMouseDesktopApp, ctx: &Context, frame: &mut Frame) {
     CentralPanel::default()
         .frame(EguiFrame::new().fill(canvas).inner_margin(12))
         .show(ctx, |ui| {
-            ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    match app.preferences.navigation {
-                        NavigationPage::Overview => pages::overview::render(app, ui, ctx),
-                        NavigationPage::Clients => pages::clients::render(app, ui),
-                        NavigationPage::Layout => pages::layout::render(app, ui, ctx),
-                        NavigationPage::Security => pages::security::render(app, ui, ctx),
-                        NavigationPage::Settings => pages::settings::render(app, ui),
-                    }
-                });
+            // Layout page needs the real viewport height — don't wrap it in ScrollArea
+            if matches!(app.preferences.navigation, NavigationPage::Layout) {
+                pages::layout::render(app, ui, ctx);
+            } else {
+                ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        match app.preferences.navigation {
+                            NavigationPage::Overview => pages::overview::render(app, ui, ctx),
+                            NavigationPage::Clients => pages::clients::render(app, ui),
+                            NavigationPage::Layout => unreachable!(),
+                            NavigationPage::Security => pages::security::render(app, ui, ctx),
+                            NavigationPage::Settings => pages::settings::render(app, ui),
+                        }
+                    });
+            }
         });
 
     dialogs::render_toasts(app, ctx);

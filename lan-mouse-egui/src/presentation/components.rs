@@ -203,7 +203,7 @@ pub fn fingerprint_block(ui: &mut Ui, fingerprint: &str, theme: &ActiveTheme) {
         .corner_radius(CornerRadius::same(8))
         .inner_margin(8)
         .show(ui, |ui| {
-            ui.monospace(fingerprint);
+            ui.add(egui::Label::new(RichText::new(fingerprint).monospace()).wrap());
         });
 }
 

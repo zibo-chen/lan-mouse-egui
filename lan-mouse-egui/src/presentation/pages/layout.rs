@@ -1,6 +1,6 @@
 use eframe::egui::{
-    self, Color32, Context, CornerRadius, Frame, Margin, Pos2, Rect, RichText,
-    Sense, Stroke, StrokeKind, Ui, Vec2, vec2,
+    self, Color32, Context, CornerRadius, Frame, Margin, Pos2, Rect, RichText, Sense, Stroke,
+    StrokeKind, Ui, Vec2, vec2,
 };
 use lan_mouse_ipc::FrontendRequest;
 
@@ -8,8 +8,8 @@ use crate::{
     application::LanMouseDesktopApp,
     domain::ActiveTheme,
     presentation::components::{
-        action_button, card_title, elevated_frame, help_text, section_heading,
-        tinted_frame, toggle_switch, ButtonKind,
+        ButtonKind, action_button, card_title, elevated_frame, help_text, section_heading,
+        tinted_frame, toggle_switch,
     },
 };
 
@@ -21,7 +21,12 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut Ui, ctx: &Context) {
     let text = app.text();
 
     // Header
-    section_heading(ui, text.label_screen_layout, text.nav_layout_subtitle, &theme);
+    section_heading(
+        ui,
+        text.label_screen_layout,
+        text.nav_layout_subtitle,
+        &theme,
+    );
     ui.add_space(6.0);
 
     // Status line
@@ -39,8 +44,12 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut Ui, ctx: &Context) {
 
     // Main area: Canvas + detected-screens sidebar
     let avail = ui.available_size();
-    let sidebar_w = 200.0_f32.min(avail.x * 0.28);
-    let canvas_w = avail.x - sidebar_w - 8.0;
+    let item_spacing = ui.spacing().item_spacing.x;
+    // elevated_frame inner_margin(10)*2 + tinted_frame inner_margin(8)*2 + gap + item_spacing
+    let frame_overhead = 20.0 + 16.0 + 4.0 + item_spacing;
+    let usable_w = (avail.x - frame_overhead).max(200.0);
+    let sidebar_w = (usable_w * 0.22).clamp(140.0, 200.0);
+    let canvas_w = usable_w - sidebar_w;
     let canvas_h = (avail.y - 44.0).max(200.0); // reserve 44 for bottom controls
 
     ui.horizontal(|ui| {
@@ -61,12 +70,7 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut Ui, ctx: &Context) {
 
 // ─── Canvas ───
 
-fn render_canvas(
-    app: &mut LanMouseDesktopApp,
-    ui: &mut Ui,
-    _ctx: &Context,
-    size: Vec2,
-) {
+fn render_canvas(app: &mut LanMouseDesktopApp, ui: &mut Ui, _ctx: &Context, size: Vec2) {
     let theme = app.theme().clone();
 
     elevated_frame(&theme).show(ui, |ui| {
@@ -104,7 +108,7 @@ fn render_canvas(
         }
 
         // Drag in progress
-            if let Some(idx) = app.layout.dragging {
+        if let Some(idx) = app.layout.dragging {
             if resp.dragged() {
                 if let Some(pointer) = resp.interact_pointer_pos() {
                     let raw_x = pointer.x - canvas_origin.x - app.layout.drag_offset.x;
@@ -154,7 +158,12 @@ fn render_canvas(
             let stroke_w = if is_dragging { 2.0 } else { 1.0 };
 
             painter.rect_filled(r, CornerRadius::same(4), fill);
-            painter.rect_stroke(r, CornerRadius::same(4), Stroke::new(stroke_w, stroke_color), StrokeKind::Inside);
+            painter.rect_stroke(
+                r,
+                CornerRadius::same(4),
+                Stroke::new(stroke_w, stroke_color),
+                StrokeKind::Inside,
+            );
 
             // Screen label (device name + resolution)
             let label = &screen.label;
@@ -181,10 +190,7 @@ fn render_canvas(
                 let label_w = label_galley.size().x;
                 let res_w = res_galley.size().x;
                 painter.galley(
-                    Pos2::new(
-                        (center.x - label_w * 0.5).max(r.left() + 2.0),
-                        y_start,
-                    ),
+                    Pos2::new((center.x - label_w * 0.5).max(r.left() + 2.0), y_start),
                     label_galley,
                     Color32::TRANSPARENT,
                 );
@@ -238,11 +244,7 @@ fn draw_grid(painter: &egui::Painter, rect: Rect, theme: &ActiveTheme) {
 
 // ─── Detected screens sidebar ───
 
-fn render_screen_list(
-    app: &mut LanMouseDesktopApp,
-    ui: &mut Ui,
-    size: Vec2,
-) {
+fn render_screen_list(app: &mut LanMouseDesktopApp, ui: &mut Ui, size: Vec2) {
     let theme = app.theme().clone();
     let text = app.text();
 

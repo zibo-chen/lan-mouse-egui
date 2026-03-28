@@ -16,10 +16,12 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut egui::Ui) {
 
     let total_w = ui.available_width();
     let half = (total_w - 8.0) / 2.0;
+    let combo_w = (half - 40.0).clamp(100.0, 180.0);
 
     ui.horizontal_top(|ui| {
         // Appearance
-        ui.allocate_ui(Vec2::new(half, 0.0), |ui| {
+        ui.allocate_ui_with_layout(Vec2::new(half, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+            ui.set_max_width(half);
             elevated_frame(theme).show(ui, |ui| {
                 card_title(ui, text.label_desktop, theme);
                 ui.add_space(4.0);
@@ -27,7 +29,7 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut egui::Ui) {
                 field_label(ui, text.label_theme_family, theme);
                 ComboBox::from_id_salt("theme-family")
                     .selected_text(text.theme_family(app.preferences.theme_family))
-                    .width(180.0)
+                    .width(combo_w)
                     .show_ui(ui, |ui| {
                         for family in ThemeFamily::ALL {
                             ui.selectable_value(
@@ -42,7 +44,7 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut egui::Ui) {
                 field_label(ui, text.label_appearance, theme);
                 ComboBox::from_id_salt("theme-mode")
                     .selected_text(text.theme_mode(app.preferences.theme_mode))
-                    .width(180.0)
+                    .width(combo_w)
                     .show_ui(ui, |ui| {
                         for mode in ThemeModeChoice::ALL {
                             ui.selectable_value(
@@ -57,7 +59,7 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut egui::Ui) {
                 field_label(ui, text.label_language, theme);
                 ComboBox::from_id_salt("lang")
                     .selected_text(text.language_choice(app.preferences.language))
-                    .width(180.0)
+                    .width(combo_w)
                     .show_ui(ui, |ui| {
                         for choice in LanguageChoice::ALL {
                             ui.selectable_value(
@@ -73,7 +75,8 @@ pub fn render(app: &mut LanMouseDesktopApp, ui: &mut egui::Ui) {
         ui.add_space(8.0);
 
         // Network
-        ui.allocate_ui(Vec2::new(half, 0.0), |ui| {
+        ui.allocate_ui_with_layout(Vec2::new(half, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+            ui.set_max_width(half);
             elevated_frame(theme).show(ui, |ui| {
                 card_title(ui, text.label_network, theme);
                 ui.add_space(4.0);
