@@ -58,6 +58,85 @@ pub enum IpcError {
 
 pub const DEFAULT_PORT: u16 = 4242;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ClientPlatform {
+    #[default]
+    Unknown,
+    Windows,
+    Macos,
+    Linux,
+}
+
+impl Display for ClientPlatform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            ClientPlatform::Unknown => "unknown",
+            ClientPlatform::Windows => "windows",
+            ClientPlatform::Macos => "macos",
+            ClientPlatform::Linux => "linux",
+        };
+        write!(f, "{label}")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScrollMode {
+    #[default]
+    Physical,
+    TargetNative,
+}
+
+impl Display for ScrollMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            ScrollMode::Physical => "physical",
+            ScrollMode::TargetNative => "target-native",
+        };
+        write!(f, "{label}")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShortcutMode {
+    #[default]
+    Physical,
+    SourceNative,
+}
+
+impl Display for ShortcutMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let label = match self {
+            ShortcutMode::Physical => "physical",
+            ShortcutMode::SourceNative => "source-native",
+        };
+        write!(f, "{label}")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InputProfile {
+    pub source_platform: ClientPlatform,
+    pub scroll_mode: ScrollMode,
+    pub shortcut_mode: ShortcutMode,
+    pub scroll_scale_x: f32,
+    pub scroll_scale_y: f32,
+}
+
+impl Default for InputProfile {
+    fn default() -> Self {
+        Self {
+            source_platform: ClientPlatform::Unknown,
+            scroll_mode: ScrollMode::Physical,
+            shortcut_mode: ShortcutMode::Physical,
+            scroll_scale_x: 1.0,
+            scroll_scale_y: 1.0,
+        }
+    }
+}
+
 #[derive(Debug, Default, Eq, Hash, PartialEq, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Position {
@@ -128,7 +207,7 @@ impl TryFrom<&str> for Position {
     }
 }
 
-#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub struct ClientConfig {
     /// hostname of this client
     pub hostname: Option<String>,
@@ -140,6 +219,8 @@ pub struct ClientConfig {
     pub pos: Position,
     /// enter hook
     pub cmd: Option<String>,
+    /// per-client input transform profile
+    pub input_profile: InputProfile,
 }
 
 impl Default for ClientConfig {
@@ -150,6 +231,7 @@ impl Default for ClientConfig {
             fix_ips: Default::default(),
             pos: Default::default(),
             cmd: None,
+            input_profile: Default::default(),
         }
     }
 }
@@ -219,7 +301,7 @@ pub enum FrontendEvent {
     ConnectionAttempt { fingerprint: String },
 }
 
-#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 pub enum FrontendRequest {
     /// activate/deactivate client
     Activate(ClientHandle, bool),
@@ -253,6 +335,8 @@ pub enum FrontendRequest {
     RemoveAuthorizedKey(String),
     /// change the hook command
     UpdateEnterHook(u64, Option<String>),
+    /// update cross-platform input behavior
+    UpdateInputProfile(ClientHandle, InputProfile),
     /// save config file
     SaveConfiguration,
 }

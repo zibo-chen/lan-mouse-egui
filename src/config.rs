@@ -15,7 +15,7 @@ use toml;
 use toml_edit::{self, DocumentMut};
 
 use lan_mouse_cli::CliArgs;
-use lan_mouse_ipc::{DEFAULT_PORT, Position};
+use lan_mouse_ipc::{DEFAULT_PORT, InputProfile, Position};
 
 use input_event::scancode::{
     self,
@@ -57,7 +57,7 @@ struct ConfigToml {
     authorized_fingerprints: Option<HashMap<String, String>>,
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug, Eq, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 struct TomlClient {
     hostname: Option<String>,
     host_name: Option<String>,
@@ -66,6 +66,7 @@ struct TomlClient {
     position: Option<Position>,
     activate_on_startup: Option<bool>,
     enter_hook: Option<String>,
+    input_profile: Option<InputProfile>,
 }
 
 impl ConfigToml {
@@ -255,6 +256,7 @@ pub struct ConfigClient {
     pub pos: Position,
     pub active: bool,
     pub enter_hook: Option<String>,
+    pub input_profile: InputProfile,
 }
 
 impl From<TomlClient> for ConfigClient {
@@ -265,6 +267,7 @@ impl From<TomlClient> for ConfigClient {
         let ips = HashSet::from_iter(toml.ips.into_iter().flatten());
         let port = toml.port.unwrap_or(DEFAULT_PORT);
         let pos = toml.position.unwrap_or_default();
+        let input_profile = toml.input_profile.unwrap_or_default();
         Self {
             ips,
             hostname,
@@ -272,6 +275,7 @@ impl From<TomlClient> for ConfigClient {
             pos,
             active,
             enter_hook,
+            input_profile,
         }
     }
 }
@@ -291,6 +295,7 @@ impl From<ConfigClient> for TomlClient {
         let position = Some(client.pos);
         let activate_on_startup = if client.active { Some(true) } else { None };
         let enter_hook = client.enter_hook;
+        let input_profile = Some(client.input_profile);
         Self {
             hostname,
             host_name,
@@ -299,6 +304,7 @@ impl From<ConfigClient> for TomlClient {
             position,
             activate_on_startup,
             enter_hook,
+            input_profile,
         }
     }
 }

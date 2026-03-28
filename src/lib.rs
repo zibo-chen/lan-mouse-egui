@@ -7,5 +7,6 @@ mod crypto;
 mod dns;
 mod emulation;
 pub mod emulation_test;
+mod input_profile;
 mod listen;
 pub mod service;

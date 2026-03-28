@@ -271,6 +271,10 @@ nix develop
 
 By default the egui frontend will open when running `lan-mouse`.
 
+Closing the egui window does not stop the client anymore. Lan Mouse keeps running in the background
+and can be restored from the system tray when tray support is available, or from the taskbar / dock otherwise.
+Use the tray menu or the in-app `Quit` action when you want to stop the frontend and its child service.
+
 To connect a device you want to control, simply click the `Add` button and enter the hostname
 of the device.
 
@@ -364,6 +368,13 @@ hostname = "iridium"
 activate_on_startup = true
 # optional list of (known) ip addresses
 ips = ["192.168.178.156"]
+# optional cross-platform input tuning for this remote machine
+[clients.input_profile]
+source_platform = "windows"
+scroll_mode = "target-native"
+shortcut_mode = "source-native"
+scroll_scale_x = 1.0
+scroll_scale_y = 1.0
 
 # define a client on the left side with IP address 192.168.178.189
 [[clients]]
@@ -378,6 +389,18 @@ port = 4242
 ```
 
 Where `left` can be either `left`, `right`, `top` or `bottom`.
+
+Each client can optionally define an `input_profile` for cross-platform behavior on the receiving
+side:
+
+- `source_platform`: `windows`, `macos`, `linux`, or `unknown`
+- `scroll_mode`: `physical` keeps raw wheel direction, `target-native` flips scrolling when moving
+  between macOS and Windows/Linux
+- `shortcut_mode`: `physical` keeps raw modifier behavior, `source-native` maps primary shortcuts
+  such as `Ctrl+C` on Windows/Linux to `Command+C` on macOS
+- `scroll_scale_x` / `scroll_scale_y`: horizontal and vertical scroll sensitivity multipliers
+
+The egui frontend exposes the same settings per client in the `Input Profile` section.
 
 ## Roadmap
 - [x] Graphical frontend (egui)

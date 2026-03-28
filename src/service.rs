@@ -89,6 +89,7 @@ impl Service {
                 port: client.port,
                 pos: client.pos,
                 cmd: client.enter_hook,
+                input_profile: client.input_profile,
             };
             let state = ClientState {
                 active: client.active,
@@ -117,7 +118,7 @@ impl Service {
         let capture_backend = config.capture_backend().map(|b| b.into());
         let capture = Capture::new(capture_backend, conn, config.release_bind());
         let emulation_backend = config.emulation_backend().map(|b| b.into());
-        let emulation = Emulation::new(emulation_backend, listener);
+        let emulation = Emulation::new(emulation_backend, listener, client_manager.clone());
 
         // create dns resolver
         let resolver = DnsResolver::new()?;
@@ -230,6 +231,9 @@ impl Service {
             FrontendRequest::UpdateEnterHook(handle, enter_hook) => {
                 self.update_enter_hook(handle, enter_hook)
             }
+            FrontendRequest::UpdateInputProfile(handle, input_profile) => {
+                self.update_input_profile(handle, input_profile)
+            }
             FrontendRequest::SaveConfiguration => self.save_config(),
         }
     }
@@ -245,6 +249,7 @@ impl Service {
                 pos: c.pos,
                 active: s.active,
                 enter_hook: c.cmd,
+                input_profile: c.input_profile,
             })
             .collect();
         self.config.set_clients(clients);
@@ -551,6 +556,15 @@ impl Service {
 
     fn update_enter_hook(&mut self, handle: ClientHandle, enter_hook: Option<String>) {
         self.client_manager.set_enter_hook(handle, enter_hook);
+        self.broadcast_client(handle);
+    }
+
+    fn update_input_profile(
+        &mut self,
+        handle: ClientHandle,
+        input_profile: lan_mouse_ipc::InputProfile,
+    ) {
+        self.client_manager.set_input_profile(handle, input_profile);
         self.broadcast_client(handle);
     }
 

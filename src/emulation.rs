@@ -1,4 +1,8 @@
-use crate::listen::{LanMouseListener, ListenEvent, ListenerCreationError};
+use crate::{
+    client::ClientManager,
+    input_profile::EventTransformer,
+    listen::{LanMouseListener, ListenEvent, ListenerCreationError},
+};
 use futures::StreamExt;
 use input_emulation::{EmulationHandle, InputEmulation, InputEmulationError};
 use input_event::Event;
@@ -65,8 +69,9 @@ impl Emulation {
     pub(crate) fn new(
         backend: Option<input_emulation::Backend>,
         listener: LanMouseListener,
+        client_manager: ClientManager,
     ) -> Self {
-        let emulation_proxy = EmulationProxy::new(backend);
+        let emulation_proxy = EmulationProxy::new(backend, client_manager);
         let (request_tx, request_rx) = channel();
         let (event_tx, event_rx) = channel();
         let emulation_task = ListenTask {
@@ -216,7 +221,7 @@ enum ProxyRequest {
 }
 
 impl EmulationProxy {
-    fn new(backend: Option<input_emulation::Backend>) -> Self {
+    fn new(backend: Option<input_emulation::Backend>, client_manager: ClientManager) -> Self {
         let (request_tx, request_rx) = channel();
         let (event_tx, event_rx) = channel();
         let emulation_active = Rc::new(Cell::new(false));
@@ -227,6 +232,8 @@ impl EmulationProxy {
             request_rx,
             event_tx,
             handles: Default::default(),
+            transformers: Default::default(),
+            client_manager,
             next_id: 0,
         };
         let task = spawn_local(emulation_task.run());
@@ -286,6 +293,8 @@ struct EmulationTask {
     request_rx: Receiver<ProxyRequest>,
     event_tx: Sender<EmulationEvent>,
     handles: HashMap<SocketAddr, EmulationHandle>,
+    transformers: HashMap<SocketAddr, EventTransformer>,
+    client_manager: ClientManager,
     next_id: EmulationHandle,
 }
 
@@ -368,9 +377,21 @@ impl EmulationTask {
                                 handle
                             }
                         };
-                        emulation.consume(event, handle).await?;
+                        let profile = self
+                            .client_manager
+                            .get_input_profile_for_addr(addr)
+                            .unwrap_or_default();
+                        let transformer = self
+                            .transformers
+                            .entry(addr)
+                            .or_insert_with(|| EventTransformer::new(profile.clone()));
+                        transformer.update_profile(profile);
+                        for event in transformer.transform(event) {
+                            emulation.consume(event, handle).await?;
+                        }
                     },
                     ProxyRequest::Remove(addr) => {
+                        self.transformers.remove(&addr);
                         if let Some(handle) = self.handles.remove(&addr) {
                             emulation.destroy(handle).await;
                         }

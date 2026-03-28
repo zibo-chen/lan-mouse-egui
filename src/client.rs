@@ -7,7 +7,7 @@ use std::{
 
 use slab::Slab;
 
-use lan_mouse_ipc::{ClientConfig, ClientHandle, ClientState, Position};
+use lan_mouse_ipc::{ClientConfig, ClientHandle, ClientState, InputProfile, Position};
 
 #[derive(Clone, Default)]
 pub struct ClientManager {
@@ -228,6 +228,22 @@ impl ClientManager {
             .borrow()
             .get(handle as usize)
             .and_then(|(c, _)| c.cmd.clone())
+    }
+
+    pub(crate) fn set_input_profile(&self, handle: ClientHandle, input_profile: InputProfile) {
+        if let Some((c, _)) = self.clients.borrow_mut().get_mut(handle as usize) {
+            c.input_profile = input_profile;
+        }
+    }
+
+    pub(crate) fn get_input_profile_for_addr(&self, addr: SocketAddr) -> Option<InputProfile> {
+        self.clients.borrow().iter().find_map(|(_, (c, s))| {
+            if c.fix_ips.contains(&addr.ip()) || s.ips.contains(&addr.ip()) {
+                Some(c.input_profile.clone())
+            } else {
+                None
+            }
+        })
     }
 
     /// returns all clients that are currently active
