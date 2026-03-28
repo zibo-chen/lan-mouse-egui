@@ -1,4 +1,6 @@
-use super::{Capture, CaptureError, CaptureEvent, Position, error::MacosCaptureCreationError};
+use super::{
+    Capture, CaptureError, CaptureEvent, DisplayInfo, Position, error::MacosCaptureCreationError,
+};
 use async_trait::async_trait;
 use bitflags::bitflags;
 use core_foundation::{
@@ -180,6 +182,28 @@ impl InputCaptureState {
         };
         Ok(())
     }
+}
+
+pub(crate) fn current_displays() -> Vec<DisplayInfo> {
+    let Ok(active_ids) = CGDisplay::active_displays() else {
+        return Vec::new();
+    };
+
+    active_ids
+        .into_iter()
+        .map(|display_id| {
+            let display = CGDisplay::new(display_id);
+            let bounds = display.bounds();
+            DisplayInfo {
+                name: format!("Display {}", display.id),
+                x: bounds.origin.x.round() as i32,
+                y: bounds.origin.y.round() as i32,
+                width: bounds.size.width.round() as u32,
+                height: bounds.size.height.round() as u32,
+                primary: display.is_main(),
+            }
+        })
+        .collect()
 }
 
 fn get_events(
