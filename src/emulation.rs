@@ -6,7 +6,9 @@ use crate::{
 use futures::StreamExt;
 use input_emulation::{EmulationHandle, InputEmulation, InputEmulationError};
 use input_event::Event;
-use lan_mouse_proto::{DisplayInfo as ProtoDisplayInfo, PongPayload, Position, ProtoEvent};
+use lan_mouse_proto::{
+    DisplayInfo as ProtoDisplayInfo, LayoutRectProto, PongPayload, Position, ProtoEvent,
+};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use std::{
     cell::Cell,
@@ -56,6 +58,12 @@ pub(crate) enum EmulationEvent {
     EmulationEnabled,
     /// capture should be released
     ReleaseNotify,
+    /// layout sync received from a remote peer
+    LayoutSync {
+        addr: SocketAddr,
+        sender_rects: Vec<LayoutRectProto>,
+        receiver_rects: Vec<LayoutRectProto>,
+    },
 }
 
 enum EmulationRequest {
@@ -163,6 +171,13 @@ impl ListenTask {
                                         screens: current_proto_displays(),
                                     }),
                                 ).await
+                            }
+                            ProtoEvent::LayoutSync { sender_rects, receiver_rects } => {
+                                self.event_tx.send(EmulationEvent::LayoutSync {
+                                    addr,
+                                    sender_rects,
+                                    receiver_rects,
+                                }).expect("channel closed");
                             }
                             _ => {}
                         }

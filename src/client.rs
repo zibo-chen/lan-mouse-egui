@@ -285,6 +285,24 @@ impl ClientManager {
             .and_then(|(_, s)| s.active_addr)
     }
 
+    /// Find the client handle for a given active address.
+    pub(crate) fn find_handle_by_addr(&self, addr: SocketAddr) -> Option<ClientHandle> {
+        self.clients
+            .borrow()
+            .iter()
+            .find(|(_, (_, s))| s.active_addr == Some(addr))
+            .map(|(k, _)| k as ClientHandle)
+    }
+
+    /// Find the client handle by matching IP address (ignoring port).
+    pub(crate) fn find_handle_by_ip(&self, ip: IpAddr) -> Option<ClientHandle> {
+        self.clients
+            .borrow()
+            .iter()
+            .find(|(_, (_, s))| s.ips.contains(&ip) || s.active_addr.map(|a| a.ip()) == Some(ip))
+            .map(|(k, _)| k as ClientHandle)
+    }
+
     pub(crate) fn alive(&self, handle: ClientHandle) -> bool {
         self.clients
             .borrow()
@@ -308,7 +326,11 @@ impl ClientManager {
     }
 
     /// update layout rects for a client
-    pub(crate) fn set_layout_rects(&self, handle: ClientHandle, layout_rects: Vec<LayoutRect>) -> bool {
+    pub(crate) fn set_layout_rects(
+        &self,
+        handle: ClientHandle,
+        layout_rects: Vec<LayoutRect>,
+    ) -> bool {
         match self.clients.borrow_mut().get_mut(handle as usize) {
             Some((c, s)) if c.layout_rects != layout_rects => {
                 log::info!("update layout_rects {handle}: {} rects", layout_rects.len());

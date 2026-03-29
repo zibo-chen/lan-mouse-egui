@@ -10,7 +10,7 @@ use input_capture::{
     CaptureError, CaptureEvent, CaptureHandle, InputCapture, InputCaptureError, Position,
 };
 use input_event::scancode;
-use lan_mouse_proto::ProtoEvent;
+use lan_mouse_proto::{LayoutRectProto, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use tokio::task::{JoinHandle, spawn_local};
 use tokio_util::sync::CancellationToken;
@@ -52,7 +52,7 @@ pub(crate) enum CaptureType {
     EnterOnly,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum CaptureRequest {
     /// capture must release the mouse
     Release,
@@ -62,6 +62,8 @@ enum CaptureRequest {
     Destroy(CaptureHandle),
     /// reenable input capture
     Reenable,
+    /// send layout sync to a specific client
+    SendLayoutSync(CaptureHandle, Vec<LayoutRectProto>, Vec<LayoutRectProto>),
 }
 
 impl Capture {
@@ -135,6 +137,21 @@ impl Capture {
     pub(crate) fn release(&self) {
         self.request_tx
             .send(CaptureRequest::Release)
+            .expect("channel closed");
+    }
+
+    pub(crate) fn send_layout_sync(
+        &self,
+        handle: CaptureHandle,
+        sender_rects: Vec<LayoutRectProto>,
+        receiver_rects: Vec<LayoutRectProto>,
+    ) {
+        self.request_tx
+            .send(CaptureRequest::SendLayoutSync(
+                handle,
+                sender_rects,
+                receiver_rects,
+            ))
             .expect("channel closed");
     }
 
@@ -232,6 +249,12 @@ impl CaptureTask {
                         CaptureRequest::Create(h, p, t, rh) => self.add_capture(h, p, t, rh),
                         CaptureRequest::Destroy(h) => self.remove_capture(h),
                         CaptureRequest::Release => { /* nothing to do */ }
+                        CaptureRequest::SendLayoutSync(h, sr, rr) => {
+                            let event = ProtoEvent::LayoutSync { sender_rects: sr, receiver_rects: rr };
+                            if let Err(e) = self.conn.send(event, h).await {
+                                log::warn!("failed to send LayoutSync to {h}: {e}");
+                            }
+                        }
                     },
                     _ = self.cancellation_token.cancelled() => return,
                 }
@@ -330,6 +353,12 @@ impl CaptureTask {
                     CaptureRequest::Destroy(h) => {
                         self.remove_capture(h);
                         capture.destroy(h).await?;
+                    }
+                    CaptureRequest::SendLayoutSync(h, sr, rr) => {
+                        let event = ProtoEvent::LayoutSync { sender_rects: sr, receiver_rects: rr };
+                        if let Err(e) = self.conn.send(event, h).await {
+                            log::warn!("failed to send LayoutSync to {h}: {e}");
+                        }
                     }
                 },
                 _ = self.cancellation_token.cancelled() => break,

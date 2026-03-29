@@ -32,6 +32,14 @@ pub struct DisplayInfo {
     pub primary: bool,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct LayoutRectProto {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PongPayload {
     pub alive: bool,
@@ -79,6 +87,13 @@ pub enum ProtoEvent {
     Ping,
     /// Response to [`ProtoEvent::Ping`], including availability and current displays.
     Pong(PongPayload),
+    /// Synchronize 2D layout rects from one device to another.
+    /// `sender_rects` = sender's local display rects in shared layout space.
+    /// `receiver_rects` = receiver's display rects as positioned by the sender.
+    LayoutSync {
+        sender_rects: Vec<LayoutRectProto>,
+        receiver_rects: Vec<LayoutRectProto>,
+    },
 }
 
 impl Display for ProtoEvent {
@@ -101,6 +116,17 @@ impl Display for ProtoEvent {
                     payload.screens.len()
                 )
             }
+            ProtoEvent::LayoutSync {
+                sender_rects,
+                receiver_rects,
+            } => {
+                write!(
+                    f,
+                    "LayoutSync({} sender, {} receiver)",
+                    sender_rects.len(),
+                    receiver_rects.len()
+                )
+            }
         }
     }
 }
@@ -119,6 +145,7 @@ pub enum EventType {
     Enter,
     Leave,
     Ack,
+    LayoutSync,
 }
 
 impl ProtoEvent {
@@ -141,6 +168,7 @@ impl ProtoEvent {
             ProtoEvent::Enter(..) => EventType::Enter,
             ProtoEvent::Leave(_) => EventType::Leave,
             ProtoEvent::Ack(_) => EventType::Ack,
+            ProtoEvent::LayoutSync { .. } => EventType::LayoutSync,
         }
     }
 }
@@ -215,6 +243,32 @@ impl TryFrom<[u8; MAX_EVENT_SIZE]> for ProtoEvent {
             }
             EventType::Leave => Ok(Self::Leave(decode_u32(&mut buf)?)),
             EventType::Ack => Ok(Self::Ack(decode_u32(&mut buf)?)),
+            EventType::LayoutSync => {
+                let sender_count = decode_u8(&mut buf)? as usize;
+                let receiver_count = decode_u8(&mut buf)? as usize;
+                let mut sender_rects = Vec::with_capacity(sender_count);
+                for _ in 0..sender_count {
+                    sender_rects.push(LayoutRectProto {
+                        x: decode_f64(&mut buf)?,
+                        y: decode_f64(&mut buf)?,
+                        w: decode_f64(&mut buf)?,
+                        h: decode_f64(&mut buf)?,
+                    });
+                }
+                let mut receiver_rects = Vec::with_capacity(receiver_count);
+                for _ in 0..receiver_count {
+                    receiver_rects.push(LayoutRectProto {
+                        x: decode_f64(&mut buf)?,
+                        y: decode_f64(&mut buf)?,
+                        w: decode_f64(&mut buf)?,
+                        h: decode_f64(&mut buf)?,
+                    });
+                }
+                Ok(Self::LayoutSync {
+                    sender_rects,
+                    receiver_rects,
+                })
+            }
         }
     }
 }
@@ -295,6 +349,27 @@ impl From<ProtoEvent> for ([u8; MAX_EVENT_SIZE], usize) {
                 }
                 ProtoEvent::Leave(serial) => encode_u32(buf, len, serial),
                 ProtoEvent::Ack(serial) => encode_u32(buf, len, serial),
+                ProtoEvent::LayoutSync {
+                    sender_rects,
+                    receiver_rects,
+                } => {
+                    let sc = sender_rects.len().min(u8::MAX as usize) as u8;
+                    let rc = receiver_rects.len().min(u8::MAX as usize) as u8;
+                    encode_u8(buf, len, sc);
+                    encode_u8(buf, len, rc);
+                    for r in sender_rects.into_iter().take(sc as usize) {
+                        encode_f64(buf, len, r.x);
+                        encode_f64(buf, len, r.y);
+                        encode_f64(buf, len, r.w);
+                        encode_f64(buf, len, r.h);
+                    }
+                    for r in receiver_rects.into_iter().take(rc as usize) {
+                        encode_f64(buf, len, r.x);
+                        encode_f64(buf, len, r.y);
+                        encode_f64(buf, len, r.w);
+                        encode_f64(buf, len, r.h);
+                    }
+                }
             }
         }
         (buf, len)

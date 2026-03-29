@@ -15,6 +15,7 @@ use lan_mouse_ipc::{
     AsyncFrontendListener, ClientConfig, ClientHandle, ClientState, DisplayInfo, FrontendEvent,
     FrontendRequest, IpcError, IpcListenerCreationError, LayoutRect, Position, Status,
 };
+use lan_mouse_proto::LayoutRectProto;
 use log;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -272,6 +273,7 @@ impl Service {
                 self.update_input_profile(handle, input_profile)
             }
             FrontendRequest::SaveConfiguration => self.save_config(),
+            FrontendRequest::SyncLayout => self.sync_layout_to_peers(),
         }
     }
 
@@ -352,6 +354,13 @@ impl Service {
             EmulationEvent::ReleaseNotify => self.capture.release(),
             EmulationEvent::Connected { addr, fingerprint } => {
                 self.notify_frontend(FrontendEvent::DeviceConnected { addr, fingerprint });
+            }
+            EmulationEvent::LayoutSync {
+                addr,
+                sender_rects,
+                receiver_rects,
+            } => {
+                self.handle_layout_sync(addr, sender_rects, receiver_rects);
             }
         }
     }
@@ -666,6 +675,99 @@ impl Service {
             self.rebuild_captures();
         }
         self.broadcast_client(handle);
+    }
+
+    /// Send the current layout to all connected peers via LayoutSync.
+    fn sync_layout_to_peers(&mut self) {
+        let local_rects: Vec<LayoutRectProto> = self
+            .local_layout_rects
+            .iter()
+            .map(|r| LayoutRectProto {
+                x: r.x,
+                y: r.y,
+                w: r.w,
+                h: r.h,
+            })
+            .collect();
+
+        for handle in self.client_manager.active_clients() {
+            let client_rects: Vec<LayoutRectProto> = self
+                .client_manager
+                .get_layout_rects(handle)
+                .into_iter()
+                .map(|r| LayoutRectProto {
+                    x: r.x,
+                    y: r.y,
+                    w: r.w,
+                    h: r.h,
+                })
+                .collect();
+            self.capture
+                .send_layout_sync(handle, local_rects.clone(), client_rects);
+        }
+    }
+
+    /// Process a LayoutSync received from a remote peer.
+    fn handle_layout_sync(
+        &mut self,
+        addr: SocketAddr,
+        sender_rects: Vec<LayoutRectProto>,
+        receiver_rects: Vec<LayoutRectProto>,
+    ) {
+        // Find which client handle corresponds to this address (try active addr then IP)
+        let handle = self
+            .client_manager
+            .find_handle_by_addr(addr)
+            .or_else(|| self.client_manager.find_handle_by_ip(addr.ip()));
+        let handle = match handle {
+            Some(h) => h,
+            None => {
+                log::warn!("LayoutSync from unknown addr {addr}");
+                return;
+            }
+        };
+
+        log::info!(
+            "received LayoutSync from client {handle} @ {addr}: {} sender rects, {} receiver rects",
+            sender_rects.len(),
+            receiver_rects.len()
+        );
+
+        // sender_rects = remote peer's local display positions (from our perspective, the client's rects)
+        let client_layout_rects: Vec<LayoutRect> = sender_rects
+            .iter()
+            .map(|r| LayoutRect {
+                x: r.x,
+                y: r.y,
+                w: r.w,
+                h: r.h,
+            })
+            .collect();
+        // receiver_rects = our local display positions as set by the remote peer
+        let local_layout_rects: Vec<LayoutRect> = receiver_rects
+            .iter()
+            .map(|r| LayoutRect {
+                x: r.x,
+                y: r.y,
+                w: r.w,
+                h: r.h,
+            })
+            .collect();
+
+        // Update stored layout rects for the client
+        self.client_manager
+            .set_layout_rects(handle, client_layout_rects.clone());
+        // Update local layout rects
+        self.local_layout_rects = local_layout_rects.clone();
+
+        self.rebuild_captures();
+
+        // Notify frontend about the layout sync
+        self.notify_frontend(FrontendEvent::LayoutSynced {
+            handle,
+            sender_rects: client_layout_rects,
+            receiver_rects: local_layout_rects,
+        });
     }
 
     /// rebuild all capture barriers based on current layout geometry

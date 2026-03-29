@@ -6,10 +6,9 @@ use lan_mouse_ipc::FrontendRequest;
 
 use crate::{
     application::LanMouseDesktopApp,
-    domain::ActiveTheme,
     presentation::components::{
         ButtonKind, action_button, card_title, elevated_frame, help_text, section_heading,
-        tinted_frame, toggle_switch,
+        tinted_frame,
     },
 };
 
@@ -74,16 +73,52 @@ fn render_canvas(app: &mut LanMouseDesktopApp, ui: &mut Ui, _ctx: &Context, size
     let theme = app.theme().clone();
 
     elevated_frame(&theme).show(ui, |ui| {
-        let (resp, painter) = ui.allocate_painter(size, Sense::click_and_drag());
-        let canvas_origin = resp.rect.min;
+        let (resp, mut painter) = ui.allocate_painter(size, Sense::click_and_drag());
         let canvas_rect = resp.rect;
+        let canvas_origin = canvas_rect.min;
 
-        // Draw grid
-        if app.layout.show_grid {
-            draw_grid(&painter, canvas_rect, &theme);
+        // Clip painting to canvas bounds
+        painter.set_clip_rect(canvas_rect);
+
+        // Zoom via scroll wheel
+        let hover = ui.rect_contains_pointer(canvas_rect);
+        if hover {
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+            if scroll != 0.0 {
+                let factor = 1.0 + scroll * 0.002;
+                let old_zoom = app.layout.zoom;
+                app.layout.zoom = (old_zoom * factor).clamp(0.1, 3.0);
+                // Zoom towards pointer position
+                if let Some(pointer) = ui.input(|i| i.pointer.hover_pos()) {
+                    let p = pointer - canvas_origin;
+                    app.layout.pan_offset =
+                        p - (p - app.layout.pan_offset) * (app.layout.zoom / old_zoom);
+                }
+            }
         }
 
+        let zoom = app.layout.zoom;
+        let pan = app.layout.pan_offset;
         let scale = app.layout.scale;
+
+        // Transform: canvas_pos = screen.canvas_rect(scale) * zoom + pan + canvas_origin
+        let transform = |r: Rect| -> Rect {
+            Rect::from_min_size(
+                Pos2::new(
+                    r.min.x * zoom + pan.x + canvas_origin.x,
+                    r.min.y * zoom + pan.y + canvas_origin.y,
+                ),
+                Vec2::new(r.width() * zoom, r.height() * zoom),
+            )
+        };
+
+        // Inverse transform: from screen position to canvas logical coords
+        let inv_transform = |p: Pos2| -> Pos2 {
+            Pos2::new(
+                (p.x - canvas_origin.x - pan.x) / zoom,
+                (p.y - canvas_origin.y - pan.y) / zoom,
+            )
+        };
 
         // Determine if we're starting a new drag
         if resp.drag_started() {
@@ -91,30 +126,42 @@ fn render_canvas(app: &mut LanMouseDesktopApp, ui: &mut Ui, _ctx: &Context, size
                 // Find which screen was clicked (iterate in reverse for z-order)
                 let mut hit = None;
                 for (i, screen) in app.layout.screens.iter().enumerate().rev() {
-                    let r = screen.canvas_rect(scale).translate(canvas_origin.to_vec2());
+                    let r = transform(screen.canvas_rect(scale));
                     if r.contains(pointer) {
                         hit = Some(i);
                         break;
                     }
                 }
                 if let Some(idx) = hit {
-                    let r = app.layout.screens[idx]
-                        .canvas_rect(scale)
-                        .translate(canvas_origin.to_vec2());
+                    let r = transform(app.layout.screens[idx].canvas_rect(scale));
                     app.layout.dragging = Some(idx);
                     app.layout.drag_offset = pointer - r.min;
+                    app.layout.panning = false;
+                } else {
+                    // Click on empty area → start panning
+                    app.layout.panning = true;
                 }
             }
         }
 
-        // Drag in progress
+        // Panning the canvas background
+        if app.layout.panning {
+            if resp.dragged() {
+                app.layout.pan_offset += resp.drag_delta();
+            }
+            if resp.drag_stopped() {
+                app.layout.panning = false;
+            }
+        }
+
+        // Drag a screen in progress
         if let Some(idx) = app.layout.dragging {
             if resp.dragged() {
                 if let Some(pointer) = resp.interact_pointer_pos() {
-                    let raw_x = pointer.x - canvas_origin.x - app.layout.drag_offset.x;
-                    let raw_y = pointer.y - canvas_origin.y - app.layout.drag_offset.y;
-                    let next_x = app.layout.snap(raw_x);
-                    let next_y = app.layout.snap(raw_y);
+                    let logical = inv_transform(pointer);
+                    let raw_x = logical.x - app.layout.drag_offset.x / zoom;
+                    let raw_y = logical.y - app.layout.drag_offset.y / zoom;
+                    let (next_x, next_y) = app.layout.snap_to_edges(idx, raw_x, raw_y);
                     let delta_x = next_x - app.layout.screens[idx].x;
                     let delta_y = next_y - app.layout.screens[idx].y;
                     let dragged_client = app.layout.screens[idx].id.client;
@@ -139,7 +186,11 @@ fn render_canvas(app: &mut LanMouseDesktopApp, ui: &mut Ui, _ctx: &Context, size
 
         // Draw each screen rectangle
         for (i, screen) in app.layout.screens.iter().enumerate() {
-            let r = screen.canvas_rect(scale).translate(canvas_origin.to_vec2());
+            let r = transform(screen.canvas_rect(scale));
+            // Skip if entirely outside canvas
+            if !r.intersects(canvas_rect) {
+                continue;
+            }
             let is_local = screen.id.client.is_none();
             let is_dragging = app.layout.dragging == Some(i);
 
@@ -171,15 +222,16 @@ fn render_canvas(app: &mut LanMouseDesktopApp, ui: &mut Ui, _ctx: &Context, size
             let label = &screen.label;
             let res = screen.info.resolution_label();
 
+            let font_scale = (zoom * 0.9).clamp(0.5, 1.5);
             let center = r.center();
             let label_galley = painter.layout_no_wrap(
                 label.to_string(),
-                egui::FontId::proportional(11.0),
+                egui::FontId::proportional(11.0 * font_scale),
                 theme.palette.text_primary,
             );
             let res_galley = painter.layout_no_wrap(
                 res.clone(),
-                egui::FontId::proportional(9.0),
+                egui::FontId::proportional(9.0 * font_scale),
                 theme.palette.text_secondary,
             );
 
@@ -210,7 +262,7 @@ fn render_canvas(app: &mut LanMouseDesktopApp, ui: &mut Ui, _ctx: &Context, size
             if screen.info.primary && r.width() > 60.0 {
                 let badge = painter.layout_no_wrap(
                     "★".to_string(),
-                    egui::FontId::proportional(10.0),
+                    egui::FontId::proportional(10.0 * font_scale),
                     theme.palette.accent,
                 );
                 painter.galley(
@@ -221,27 +273,6 @@ fn render_canvas(app: &mut LanMouseDesktopApp, ui: &mut Ui, _ctx: &Context, size
             }
         }
     });
-}
-
-fn draw_grid(painter: &egui::Painter, rect: Rect, theme: &ActiveTheme) {
-    let grid = 16.0;
-    let color = theme.palette.border.gamma_multiply(0.3);
-    let mut x = rect.left();
-    while x <= rect.right() {
-        painter.line_segment(
-            [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
-            Stroke::new(0.5, color),
-        );
-        x += grid;
-    }
-    let mut y = rect.top();
-    while y <= rect.bottom() {
-        painter.line_segment(
-            [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
-            Stroke::new(0.5, color),
-        );
-        y += grid;
-    }
 }
 
 // ─── Detected screens sidebar ───
@@ -315,30 +346,6 @@ fn render_controls(app: &mut LanMouseDesktopApp, ui: &mut Ui) {
     let text = app.text();
 
     ui.horizontal(|ui| {
-        // Snap to grid
-        let mut snap = app.layout.snap_to_grid;
-        if toggle_switch(ui, &mut snap, text.label_snap_to_grid, &theme) {
-            app.layout.snap_to_grid = snap;
-        }
-        ui.label(
-            RichText::new(text.label_snap_to_grid)
-                .size(12.0)
-                .color(theme.palette.text_primary),
-        );
-
-        ui.add_space(12.0);
-
-        // Show grid
-        let mut grid = app.layout.show_grid;
-        if toggle_switch(ui, &mut grid, text.label_show_grid, &theme) {
-            app.layout.show_grid = grid;
-        }
-        ui.label(
-            RichText::new(text.label_show_grid)
-                .size(12.0)
-                .color(theme.palette.text_primary),
-        );
-
         // Right-justify the action buttons
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui
@@ -375,7 +382,7 @@ fn render_controls(app: &mut LanMouseDesktopApp, ui: &mut Ui) {
     });
 }
 
-/// Send current layout to the backend: positions, layout rects, and save.
+/// Send current layout to the backend: positions, layout rects, sync, and save.
 fn apply_layout(app: &mut LanMouseDesktopApp) {
     // Derive and send adjacent edge positions for capture barrier management
     let positions = app.layout.derive_client_positions();
@@ -395,6 +402,9 @@ fn apply_layout(app: &mut LanMouseDesktopApp) {
     // Send local layout rects
     let local_rects = app.layout.derive_local_layout_rects();
     app.send_request(FrontendRequest::UpdateLocalLayout(local_rects));
+
+    // Sync layout to connected peers
+    app.send_request(FrontendRequest::SyncLayout);
 
     // Persist to disk
     app.send_request(FrontendRequest::SaveConfiguration);

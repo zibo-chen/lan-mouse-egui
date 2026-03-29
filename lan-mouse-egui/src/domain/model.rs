@@ -342,12 +342,18 @@ pub struct LayoutState {
     pub screens: Vec<LayoutScreen>,
     pub dragging: Option<usize>,
     pub drag_offset: egui::Vec2,
-    pub snap_to_grid: bool,
-    pub show_grid: bool,
     /// Dirty flag: layout has been modified since last apply.
     pub dirty: bool,
     /// Scale factor that maps real pixels → canvas pixels.
     pub scale: f32,
+    /// Viewer zoom level (1.0 = 100%).
+    pub zoom: f32,
+    /// Viewer pan offset (canvas-space pixels).
+    pub pan_offset: egui::Vec2,
+    /// Whether the canvas background is being panned.
+    pub panning: bool,
+    /// Snap distance threshold in canvas pixels for edge snapping.
+    pub snap_threshold: f32,
 }
 
 impl Default for LayoutState {
@@ -356,10 +362,12 @@ impl Default for LayoutState {
             screens: Vec::new(),
             dragging: None,
             drag_offset: egui::Vec2::ZERO,
-            snap_to_grid: true,
-            show_grid: true,
             dirty: false,
             scale: 0.15,
+            zoom: 0.7,
+            pan_offset: egui::Vec2::ZERO,
+            panning: false,
+            snap_threshold: 12.0,
         }
     }
 }
@@ -448,14 +456,94 @@ impl LayoutState {
         }
     }
 
-    /// Snap a coordinate to the nearest grid unit.
-    pub fn snap(&self, v: f32) -> f32 {
-        if self.snap_to_grid {
-            let grid = 16.0;
-            (v / grid).round() * grid
-        } else {
-            v
+    /// Snap a screen position to nearby edges of other screens.
+    /// Returns the snapped (x, y) for the screen at `drag_idx`
+    /// given proposed position `(px, py)` in canvas coords.
+    pub fn snap_to_edges(&self, drag_idx: usize, px: f32, py: f32) -> (f32, f32) {
+        let scale = self.scale;
+        let dragged = &self.screens[drag_idx];
+        let dw = dragged.canvas_w(scale);
+        let dh = dragged.canvas_h(scale);
+        let dragged_client = dragged.id.client;
+        let thresh = self.snap_threshold;
+
+        let mut sx = px;
+        let mut sy = py;
+        let mut best_dx = thresh + 1.0;
+        let mut best_dy = thresh + 1.0;
+
+        for (i, other) in self.screens.iter().enumerate() {
+            // Skip screens belonging to the same device (they move together)
+            if other.id.client == dragged_client {
+                continue;
+            }
+            // Also skip if this screen is being dragged as a group member
+            if Some(i) == self.dragging {
+                continue;
+            }
+            let or = other.canvas_rect(scale);
+
+            // Horizontal edge snapping
+            // Right edge of dragged → left edge of other
+            let d = (px + dw - or.left()).abs();
+            if d < best_dx {
+                best_dx = d;
+                sx = or.left() - dw;
+            }
+            // Left edge of dragged → right edge of other
+            let d = (px - or.right()).abs();
+            if d < best_dx {
+                best_dx = d;
+                sx = or.right();
+            }
+            // Left edge of dragged → left edge of other
+            let d = (px - or.left()).abs();
+            if d < best_dx {
+                best_dx = d;
+                sx = or.left();
+            }
+            // Right edge of dragged → right edge of other
+            let d = (px + dw - or.right()).abs();
+            if d < best_dx {
+                best_dx = d;
+                sx = or.right() - dw;
+            }
+
+            // Vertical edge snapping
+            // Bottom of dragged → top of other
+            let d = (py + dh - or.top()).abs();
+            if d < best_dy {
+                best_dy = d;
+                sy = or.top() - dh;
+            }
+            // Top of dragged → bottom of other
+            let d = (py - or.bottom()).abs();
+            if d < best_dy {
+                best_dy = d;
+                sy = or.bottom();
+            }
+            // Top of dragged → top of other
+            let d = (py - or.top()).abs();
+            if d < best_dy {
+                best_dy = d;
+                sy = or.top();
+            }
+            // Bottom of dragged → bottom of other
+            let d = (py + dh - or.bottom()).abs();
+            if d < best_dy {
+                best_dy = d;
+                sy = or.bottom() - dh;
+            }
         }
+
+        // Only snap if within threshold
+        if best_dx > thresh {
+            sx = px;
+        }
+        if best_dy > thresh {
+            sy = py;
+        }
+        (sx, sy)
     }
 
     /// Auto-arrange screens in a tidy row.
@@ -469,6 +557,93 @@ impl LayoutState {
             x += screen.canvas_w(self.scale) + gap;
         }
         self.dirty = true;
+    }
+
+    /// Apply layout rects synced from a remote peer.
+    /// `local_rects` = rects for local host screens (from remote's perspective),
+    /// `remote_rects` = rects for the peer's screens.
+    pub fn apply_synced_rects(
+        &mut self,
+        peer_handle: ClientHandle,
+        local_rects: &[LayoutRect],
+        peer_rects: &[LayoutRect],
+    ) {
+        // Update local host screen positions
+        let local_screens: Vec<usize> = self
+            .screens
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.id.client.is_none())
+            .map(|(i, _)| i)
+            .collect();
+        for (i, &idx) in local_screens.iter().enumerate() {
+            if let Some(lr) = local_rects.get(i) {
+                self.screens[idx].x = lr.x as f32 * self.scale;
+                self.screens[idx].y = lr.y as f32 * self.scale;
+            }
+        }
+
+        // Update the peer's screen positions
+        let peer_screens: Vec<usize> = self
+            .screens
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.id.client == Some(peer_handle))
+            .map(|(i, _)| i)
+            .collect();
+        for (i, &idx) in peer_screens.iter().enumerate() {
+            if let Some(lr) = peer_rects.get(i) {
+                self.screens[idx].x = lr.x as f32 * self.scale;
+                self.screens[idx].y = lr.y as f32 * self.scale;
+            }
+        }
+    }
+
+    /// Compute a zoom level that fits all screens into the given canvas size.
+    pub fn fit_zoom(&self, canvas_size: egui::Vec2) -> f32 {
+        if self.screens.is_empty() {
+            return 1.0;
+        }
+        let scale = self.scale;
+        let mut min_x = f32::MAX;
+        let mut min_y = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut max_y = f32::MIN;
+        for screen in &self.screens {
+            let r = screen.canvas_rect(scale);
+            min_x = min_x.min(r.left());
+            min_y = min_y.min(r.top());
+            max_x = max_x.max(r.right());
+            max_y = max_y.max(r.bottom());
+        }
+        let content_w = (max_x - min_x).max(1.0);
+        let content_h = (max_y - min_y).max(1.0);
+        let margin = 40.0;
+        let zx = (canvas_size.x - margin * 2.0) / content_w;
+        let zy = (canvas_size.y - margin * 2.0) / content_h;
+        zx.min(zy).clamp(0.1, 3.0)
+    }
+
+    /// Compute a pan offset that centers all screens in the canvas.
+    pub fn center_pan(&self, canvas_size: egui::Vec2) -> egui::Vec2 {
+        if self.screens.is_empty() {
+            return egui::Vec2::ZERO;
+        }
+        let scale = self.scale;
+        let mut min_x = f32::MAX;
+        let mut min_y = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut max_y = f32::MIN;
+        for screen in &self.screens {
+            let r = screen.canvas_rect(scale);
+            min_x = min_x.min(r.left());
+            min_y = min_y.min(r.top());
+            max_x = max_x.max(r.right());
+            max_y = max_y.max(r.bottom());
+        }
+        let content_center = egui::vec2((min_x + max_x) * 0.5, (min_y + max_y) * 0.5);
+        let canvas_center = egui::vec2(canvas_size.x * 0.5, canvas_size.y * 0.5);
+        canvas_center - content_center * self.zoom
     }
 
     pub fn device_count(&self) -> usize {

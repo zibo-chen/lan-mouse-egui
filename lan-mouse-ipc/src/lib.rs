@@ -340,6 +340,15 @@ pub enum FrontendEvent {
     IncomingDisconnected(SocketAddr),
     /// failed connection attempt (approval for fingerprint required)
     ConnectionAttempt { fingerprint: String },
+    /// layout rects synced from a remote peer
+    LayoutSynced {
+        /// the client handle of the peer that sent the sync
+        handle: ClientHandle,
+        /// the sender's (remote peer's) local display rects
+        sender_rects: Vec<LayoutRect>,
+        /// our own display rects as positioned by the remote peer
+        receiver_rects: Vec<LayoutRect>,
+    },
 }
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -386,6 +395,8 @@ pub enum FrontendRequest {
     UpdateInputProfile(ClientHandle, InputProfile),
     /// save config file
     SaveConfiguration,
+    /// sync layout to all connected peers
+    SyncLayout,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]

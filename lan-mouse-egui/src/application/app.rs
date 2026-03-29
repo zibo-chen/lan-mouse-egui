@@ -261,6 +261,15 @@ impl LanMouseDesktopApp {
                 FrontendEvent::NoSuchClient(handle) => {
                     self.push_toast(format!("{}: {handle}", self.text().toast_no_such_client));
                 }
+                FrontendEvent::LayoutSynced {
+                    handle,
+                    sender_rects,
+                    receiver_rects,
+                } => {
+                    self.layout
+                        .apply_synced_rects(handle, &receiver_rects, &sender_rects);
+                    layout_needs_rebuild = false; // already applied inline
+                }
             }
         }
 

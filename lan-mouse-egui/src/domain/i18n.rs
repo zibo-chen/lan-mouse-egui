@@ -157,7 +157,9 @@ pub struct Catalog {
     pub nav_layout_subtitle: &'static str,
     pub label_screen_layout: &'static str,
     pub label_detected_screens: &'static str,
+    #[allow(dead_code)]
     pub label_snap_to_grid: &'static str,
+    #[allow(dead_code)]
     pub label_show_grid: &'static str,
     pub action_auto_arrange: &'static str,
     pub label_primary: &'static str,
