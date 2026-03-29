@@ -117,7 +117,12 @@ impl Capture {
     ) {
         let pos = to_capture_pos(pos);
         self.request_tx
-            .send(CaptureRequest::Create(handle, pos, capture_type, real_client_handle))
+            .send(CaptureRequest::Create(
+                handle,
+                pos,
+                capture_type,
+                real_client_handle,
+            ))
             .expect("channel closed");
     }
 
@@ -170,7 +175,13 @@ struct CaptureTask {
 }
 
 impl CaptureTask {
-    fn add_capture(&mut self, handle: CaptureHandle, pos: Position, capture_type: CaptureType, real_handle: Option<CaptureHandle>) {
+    fn add_capture(
+        &mut self,
+        handle: CaptureHandle,
+        pos: Position,
+        capture_type: CaptureType,
+        real_handle: Option<CaptureHandle>,
+    ) {
         self.captures.push((handle, pos, capture_type));
         if let Some(rh) = real_handle {
             self.handle_map.insert(handle, rh);
@@ -286,7 +297,7 @@ impl CaptureTask {
                         }
                         ConnectionEvent::Proto(handle, event) => {
                             if let Some(active) = self.active_client {
-                                if handle != active {
+                                if handle != self.real_handle(active) {
                                     // we only care about events coming from the client we are currently connected to
                                     // only `Ack` and `Leave` are relevant
                                     continue
