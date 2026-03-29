@@ -157,6 +157,27 @@ pub enum Position {
     Bottom,
 }
 
+/// A rectangle in the shared 2D layout coordinate space.
+/// All clients and local displays are positioned in this space.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LayoutRect {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+impl Default for LayoutRect {
+    fn default() -> Self {
+        Self {
+            x: 0.0,
+            y: 0.0,
+            w: 1920.0,
+            h: 1080.0,
+        }
+    }
+}
+
 impl Position {
     pub fn opposite(&self) -> Self {
         match self {
@@ -225,8 +246,10 @@ pub struct ClientConfig {
     pub fix_ips: Vec<IpAddr>,
     /// both active_addr and addrs can be None / empty so port needs to be stored seperately
     pub port: u16,
-    /// position of a client on screen
+    /// position of a client on screen (legacy, kept for fallback)
     pub pos: Position,
+    /// 2D layout rectangles for each display of this client in the shared layout space
+    pub layout_rects: Vec<LayoutRect>,
     /// enter hook
     pub cmd: Option<String>,
     /// per-client input transform profile
@@ -240,6 +263,7 @@ impl Default for ClientConfig {
             hostname: Default::default(),
             fix_ips: Default::default(),
             pos: Default::default(),
+            layout_rects: Default::default(),
             cmd: None,
             input_profile: Default::default(),
         }
@@ -308,6 +332,9 @@ pub enum FrontendEvent {
         fingerprint: String,
         addr: SocketAddr,
         pos: Position,
+        /// entry coordinates in local display space (if available)
+        entry_x: Option<f64>,
+        entry_y: Option<f64>,
     },
     /// incoming disconnected
     IncomingDisconnected(SocketAddr),
@@ -335,6 +362,12 @@ pub enum FrontendRequest {
     UpdatePort(ClientHandle, u16),
     /// update position
     UpdatePosition(ClientHandle, Position),
+    /// update positions (multiple barrier edges for one client)
+    UpdatePositions(ClientHandle, Vec<Position>),
+    /// update 2D layout rectangles for a client's displays in the shared layout space
+    UpdateLayout(ClientHandle, Vec<LayoutRect>),
+    /// update the local host layout rectangles
+    UpdateLocalLayout(Vec<LayoutRect>),
     /// update fix-ips
     UpdateFixIps(ClientHandle, Vec<IpAddr>),
     /// request reenabling input capture

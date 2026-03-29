@@ -64,8 +64,9 @@ impl Display for Position {
 #[derive(Clone, Debug)]
 pub enum ProtoEvent {
     /// notify a client that the cursor entered its region at the given position
+    /// with entry coordinates in the target's local display coordinate space.
     /// [`ProtoEvent::Ack`] with the same serial is used for synchronization between devices
-    Enter(Position),
+    Enter(Position, f64, f64),
     /// notify a client that the cursor left its region
     /// [`ProtoEvent::Ack`] with the same serial is used for synchronization between devices
     Leave(u32),
@@ -83,7 +84,7 @@ pub enum ProtoEvent {
 impl Display for ProtoEvent {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            ProtoEvent::Enter(s) => write!(f, "Enter({s})"),
+            ProtoEvent::Enter(s, x, y) => write!(f, "Enter({s}, {x:.1}, {y:.1})"),
             ProtoEvent::Leave(s) => write!(f, "Leave({s})"),
             ProtoEvent::Ack(s) => write!(f, "Ack({s})"),
             ProtoEvent::Input(e) => write!(f, "{e}"),
@@ -92,7 +93,11 @@ impl Display for ProtoEvent {
                 write!(
                     f,
                     "pong: {} ({} displays)",
-                    if payload.alive { "alive" } else { "not available" },
+                    if payload.alive {
+                        "alive"
+                    } else {
+                        "not available"
+                    },
                     payload.screens.len()
                 )
             }
@@ -133,7 +138,7 @@ impl ProtoEvent {
             },
             ProtoEvent::Ping => EventType::Ping,
             ProtoEvent::Pong(_) => EventType::Pong,
-            ProtoEvent::Enter(_) => EventType::Enter,
+            ProtoEvent::Enter(..) => EventType::Enter,
             ProtoEvent::Leave(_) => EventType::Leave,
             ProtoEvent::Ack(_) => EventType::Ack,
         }
@@ -202,7 +207,12 @@ impl TryFrom<[u8; MAX_EVENT_SIZE]> for ProtoEvent {
                 }
                 Ok(Self::Pong(PongPayload { alive, screens }))
             }
-            EventType::Enter => Ok(Self::Enter(decode_u8(&mut buf)?.try_into()?)),
+            EventType::Enter => {
+                let pos: Position = decode_u8(&mut buf)?.try_into()?;
+                let x = decode_f64(&mut buf)?;
+                let y = decode_f64(&mut buf)?;
+                Ok(Self::Enter(pos, x, y))
+            }
             EventType::Leave => Ok(Self::Leave(decode_u32(&mut buf)?)),
             EventType::Ack => Ok(Self::Ack(decode_u32(&mut buf)?)),
         }
@@ -278,7 +288,11 @@ impl From<ProtoEvent> for ([u8; MAX_EVENT_SIZE], usize) {
                         encode_string(buf, len, &screen.name);
                     }
                 }
-                ProtoEvent::Enter(pos) => encode_u8(buf, len, pos as u8),
+                ProtoEvent::Enter(pos, x, y) => {
+                    encode_u8(buf, len, pos as u8);
+                    encode_f64(buf, len, x);
+                    encode_f64(buf, len, y);
+                }
                 ProtoEvent::Leave(serial) => encode_u32(buf, len, serial),
                 ProtoEvent::Ack(serial) => encode_u32(buf, len, serial),
             }

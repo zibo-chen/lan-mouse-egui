@@ -448,6 +448,18 @@ impl Emulation for MacOSEmulation {
 
     async fn create(&mut self, _handle: EmulationHandle) {}
 
+    async fn set_position(
+        &mut self,
+        x: f64,
+        y: f64,
+        _handle: EmulationHandle,
+    ) -> Result<(), EmulationError> {
+        let point = CGPoint::new(x, y);
+        CGDisplay::warp_mouse_cursor_position(point)
+            .map_err(|e| EmulationError::Macos(format!("warp cursor failed: {e}")))?;
+        Ok(())
+    }
+
     async fn destroy(&mut self, _handle: EmulationHandle) {}
 
     async fn terminate(&mut self) {}

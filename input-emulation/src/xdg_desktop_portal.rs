@@ -130,6 +130,16 @@ impl Emulation for DesktopPortalEmulation<'_> {
     }
 
     async fn create(&mut self, _client: EmulationHandle) {}
+    async fn set_position(
+        &mut self,
+        _x: f64,
+        _y: f64,
+        _handle: EmulationHandle,
+    ) -> Result<(), EmulationError> {
+        // xdg-desktop-portal does not support absolute cursor positioning
+        log::warn!("absolute cursor positioning not supported via xdg-desktop-portal");
+        Ok(())
+    }
     async fn destroy(&mut self, _client: EmulationHandle) {}
     async fn terminate(&mut self) {
         if let Err(e) = self.session.close().await {

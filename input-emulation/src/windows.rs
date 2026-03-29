@@ -18,6 +18,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT_0, KEYEVENTF_EXTENDEDKEY, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, SendInput,
 };
 use windows::Win32::UI::WindowsAndMessaging::{XBUTTON1, XBUTTON2};
+use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
 
 use super::{Emulation, EmulationHandle};
 
@@ -76,6 +77,16 @@ impl Emulation for WindowsEmulation {
     }
 
     async fn create(&mut self, _handle: EmulationHandle) {}
+
+    async fn set_position(
+        &mut self,
+        x: f64,
+        y: f64,
+        _handle: EmulationHandle,
+    ) -> Result<(), EmulationError> {
+        abs_mouse(x as i32, y as i32);
+        Ok(())
+    }
 
     async fn destroy(&mut self, _handle: EmulationHandle) {}
 
@@ -137,6 +148,12 @@ fn rel_mouse(dx: i32, dy: i32) {
         dwExtraInfo: 0,
     };
     send_mouse_input(mi);
+}
+
+fn abs_mouse(x: i32, y: i32) {
+    unsafe {
+        let _ = SetCursorPos(x, y);
+    }
 }
 
 fn mouse_button(button: u32, state: u32) {

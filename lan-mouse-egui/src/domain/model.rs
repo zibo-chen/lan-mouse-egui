@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     collections::BTreeMap,
     net::IpAddr,
     time::{Duration, Instant},
@@ -8,7 +9,7 @@ use eframe::egui;
 
 use lan_mouse_ipc::{
     ClientConfig, ClientHandle, ClientState, DEFAULT_PORT, DisplayInfo as DeviceDisplay,
-    InputProfile, Position, Status,
+    InputProfile, LayoutRect, Position, Status,
 };
 
 use super::{LanguageChoice, ThemeFamily, ThemeModeChoice};
@@ -482,46 +483,129 @@ impl LayoutState {
         self.screens.len()
     }
 
-    pub fn derive_client_positions(&self) -> BTreeMap<ClientHandle, Position> {
-        let mut positions = BTreeMap::new();
-        let Some(local_rect) = self.device_rect(None) else {
-            return positions;
-        };
+    /// Derive the set of adjacent edge positions for each client by examining
+    /// per-screen-pair adjacency. Returns multiple positions when a client's
+    /// screens touch different edges of different local screens.
+    pub fn derive_client_positions(&self) -> BTreeMap<ClientHandle, Vec<Position>> {
+        let mut result: BTreeMap<ClientHandle, Vec<Position>> = BTreeMap::new();
+        let scale = self.scale;
 
-        let local_center = local_rect.center();
-        for client in self
+        let local_screens: Vec<_> = self
             .screens
             .iter()
-            .filter_map(|screen| screen.id.client)
-            .collect::<std::collections::BTreeSet<_>>()
-        {
-            let Some(device_rect) = self.device_rect(Some(client)) else {
-                continue;
-            };
-            let device_center = device_rect.center();
-            let dx = device_center.x - local_center.x;
-            let dy = device_center.y - local_center.y;
+            .filter(|s| s.id.client.is_none())
+            .collect();
 
-            let pos = if dx.abs() >= dy.abs() {
-                if dx >= 0.0 {
-                    Position::Right
-                } else {
-                    Position::Left
-                }
-            } else if dy >= 0.0 {
-                Position::Bottom
-            } else {
-                Position::Top
-            };
-
-            positions.insert(client, pos);
+        if local_screens.is_empty() {
+            return result;
         }
 
-        positions
+        for client_handle in self
+            .screens
+            .iter()
+            .filter_map(|s| s.id.client)
+            .collect::<std::collections::BTreeSet<_>>()
+        {
+            let client_screens: Vec<_> = self
+                .screens
+                .iter()
+                .filter(|s| s.id.client == Some(client_handle))
+                .collect();
+
+            let mut positions = Vec::new();
+
+            // For each pair of (local screen, client screen), check adjacency.
+            // An adjacency requires: small gap on one axis AND overlap on the other.
+            const GAP_THRESHOLD: f32 = 32.0; // max pixel gap to consider "adjacent"
+
+            for local in &local_screens {
+                let lr = local.canvas_rect(scale);
+                for client in &client_screens {
+                    let cr = client.canvas_rect(scale);
+
+                    let v_overlap = axis_overlap(lr.top(), lr.bottom(), cr.top(), cr.bottom());
+                    let h_overlap = axis_overlap(lr.left(), lr.right(), cr.left(), cr.right());
+
+                    // Client is to the RIGHT of local screen
+                    if v_overlap > 0.0 && (cr.left() - lr.right()).abs() < GAP_THRESHOLD {
+                        if !positions.contains(&Position::Right) {
+                            positions.push(Position::Right);
+                        }
+                    }
+                    // Client is to the LEFT of local screen
+                    if v_overlap > 0.0 && (lr.left() - cr.right()).abs() < GAP_THRESHOLD {
+                        if !positions.contains(&Position::Left) {
+                            positions.push(Position::Left);
+                        }
+                    }
+                    // Client is ABOVE local screen
+                    if h_overlap > 0.0 && (lr.top() - cr.bottom()).abs() < GAP_THRESHOLD {
+                        if !positions.contains(&Position::Top) {
+                            positions.push(Position::Top);
+                        }
+                    }
+                    // Client is BELOW local screen
+                    if h_overlap > 0.0 && (cr.top() - lr.bottom()).abs() < GAP_THRESHOLD {
+                        if !positions.contains(&Position::Bottom) {
+                            positions.push(Position::Bottom);
+                        }
+                    }
+                }
+            }
+
+            // Fallback: if no per-screen adjacency found, use bounding-box method
+            if positions.is_empty() {
+                if let (Some(local_rect), Some(device_rect)) = (
+                    self.device_rect(None),
+                    self.device_rect(Some(client_handle)),
+                ) {
+                    positions.push(derive_position_from_rects(local_rect, device_rect));
+                }
+            }
+
+            if !positions.is_empty() {
+                result.insert(client_handle, positions);
+            }
+        }
+
+        result
+    }
+
+    /// Convert each client's screen canvas positions into `LayoutRect`s (in real pixels).
+    pub fn derive_client_layout_rects(&self) -> BTreeMap<ClientHandle, Vec<LayoutRect>> {
+        let mut result: BTreeMap<ClientHandle, Vec<LayoutRect>> = BTreeMap::new();
+        for screen in &self.screens {
+            if let Some(handle) = screen.id.client {
+                result.entry(handle).or_default().push(LayoutRect {
+                    x: (screen.x / self.scale) as f64,
+                    y: (screen.y / self.scale) as f64,
+                    w: screen.info.width as f64,
+                    h: screen.info.height as f64,
+                });
+            }
+        }
+        result
+    }
+
+    /// Convert local (host) screen canvas positions into `LayoutRect`s (in real pixels).
+    pub fn derive_local_layout_rects(&self) -> Vec<LayoutRect> {
+        self.screens
+            .iter()
+            .filter(|s| s.id.client.is_none())
+            .map(|screen| LayoutRect {
+                x: (screen.x / self.scale) as f64,
+                y: (screen.y / self.scale) as f64,
+                w: screen.info.width as f64,
+                h: screen.info.height as f64,
+            })
+            .collect()
     }
 
     fn device_rect(&self, client: Option<ClientHandle>) -> Option<egui::Rect> {
-        let mut iter = self.screens.iter().filter(|screen| screen.id.client == client);
+        let mut iter = self
+            .screens
+            .iter()
+            .filter(|screen| screen.id.client == client);
         let first = iter.next()?;
         let mut rect = first.canvas_rect(self.scale);
         for screen in iter {
@@ -529,6 +613,89 @@ impl LayoutState {
         }
         Some(rect)
     }
+}
+
+fn derive_position_from_rects(local_rect: egui::Rect, device_rect: egui::Rect) -> Position {
+    let fallback = fallback_position_from_centers(local_rect, device_rect);
+    let vertical_overlap = axis_overlap(
+        local_rect.top(),
+        local_rect.bottom(),
+        device_rect.top(),
+        device_rect.bottom(),
+    );
+    let horizontal_overlap = axis_overlap(
+        local_rect.left(),
+        local_rect.right(),
+        device_rect.left(),
+        device_rect.right(),
+    );
+
+    [
+        (
+            Position::Left,
+            (local_rect.left() - device_rect.right()).abs(),
+            vertical_overlap,
+        ),
+        (
+            Position::Right,
+            (device_rect.left() - local_rect.right()).abs(),
+            vertical_overlap,
+        ),
+        (
+            Position::Top,
+            (local_rect.top() - device_rect.bottom()).abs(),
+            horizontal_overlap,
+        ),
+        (
+            Position::Bottom,
+            (device_rect.top() - local_rect.bottom()).abs(),
+            horizontal_overlap,
+        ),
+    ]
+    .into_iter()
+    .min_by(|a, b| compare_position_candidates(*a, *b, fallback))
+    .map(|candidate| candidate.0)
+    .unwrap_or(fallback)
+}
+
+fn compare_position_candidates(
+    a: (Position, f32, f32),
+    b: (Position, f32, f32),
+    fallback: Position,
+) -> Ordering {
+    a.1.partial_cmp(&b.1)
+        .unwrap_or(Ordering::Equal)
+        .then_with(|| b.2.partial_cmp(&a.2).unwrap_or(Ordering::Equal))
+        .then_with(|| {
+            position_preference_rank(a.0, fallback).cmp(&position_preference_rank(b.0, fallback))
+        })
+}
+
+fn position_preference_rank(position: Position, fallback: Position) -> u8 {
+    u8::from(position != fallback)
+}
+
+fn fallback_position_from_centers(local_rect: egui::Rect, device_rect: egui::Rect) -> Position {
+    let local_center = local_rect.center();
+    let device_center = device_rect.center();
+    let dx = device_center.x - local_center.x;
+    let dy = device_center.y - local_center.y;
+
+    if dx.abs() >= dy.abs() {
+        if dx >= 0.0 {
+            Position::Right
+        } else {
+            Position::Left
+        }
+    } else if dy >= 0.0 {
+        Position::Bottom
+    } else {
+        Position::Top
+    }
+}
+
+fn axis_overlap(start_a: f32, end_a: f32, start_b: f32, end_b: f32) -> f32 {
+    (end_a.min(end_b) - start_a.max(start_b)).max(0.0)
 }
 
 pub fn parse_port_input(value: &str) -> u16 {
@@ -546,4 +713,86 @@ pub fn port_to_input(port: u16) -> String {
 fn sort_ips(mut ips: Vec<IpAddr>) -> Vec<IpAddr> {
     ips.sort_by_key(IpAddr::to_string);
     ips
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_screen(
+        client: Option<ClientHandle>,
+        monitor: u32,
+        width: u32,
+        height: u32,
+        x: f32,
+        y: f32,
+    ) -> LayoutScreen {
+        LayoutScreen {
+            id: ScreenId { client, monitor },
+            label: format!("screen-{monitor}"),
+            device_label: format!("device-{monitor}"),
+            info: ScreenInfo {
+                x: 0,
+                y: 0,
+                width,
+                height,
+                primary: monitor == 0,
+                name: format!("display-{monitor}"),
+            },
+            x,
+            y,
+        }
+    }
+
+    #[test]
+    fn derive_client_positions_prefers_nearest_edge_over_center_quadrant() {
+        let layout = LayoutState {
+            scale: 1.0,
+            screens: vec![
+                make_screen(None, 0, 100, 200, 0.0, 0.0),
+                make_screen(None, 1, 100, 200, 0.0, 200.0),
+                make_screen(Some(1), 0, 100, 100, 100.0, 300.0),
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            layout.derive_client_positions().get(&1),
+            Some(&vec![Position::Right])
+        );
+    }
+
+    #[test]
+    fn derive_client_positions_uses_overlap_to_resolve_corner_touching() {
+        let layout = LayoutState {
+            scale: 1.0,
+            screens: vec![
+                make_screen(None, 0, 400, 100, 0.0, 0.0),
+                make_screen(Some(1), 0, 100, 100, 300.0, -100.0),
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            layout.derive_client_positions().get(&1),
+            Some(&vec![Position::Top])
+        );
+    }
+
+    #[test]
+    fn derive_client_positions_falls_back_to_center_for_diagonal_layouts() {
+        let layout = LayoutState {
+            scale: 1.0,
+            screens: vec![
+                make_screen(None, 0, 100, 100, 0.0, 0.0),
+                make_screen(Some(1), 0, 100, 100, 150.0, -150.0),
+            ],
+            ..Default::default()
+        };
+
+        assert_eq!(
+            layout.derive_client_positions().get(&1),
+            Some(&vec![Position::Right])
+        );
+    }
 }

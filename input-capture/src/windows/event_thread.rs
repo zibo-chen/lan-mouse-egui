@@ -302,7 +302,13 @@ fn check_client_activation(wparam: WPARAM, lparam: LPARAM) -> bool {
     /* notify main thread */
     log::debug!("ENTERED @ {prev_pos:?} -> {curr_pos:?}");
     let active = ACTIVE_CLIENT.get().expect("active client");
-    blocking_send_event(active, CaptureEvent::Begin);
+    blocking_send_event(
+        active,
+        CaptureEvent::Begin {
+            x: entry_point.0 as f64,
+            y: entry_point.1 as f64,
+        },
+    );
 
     ret
 }

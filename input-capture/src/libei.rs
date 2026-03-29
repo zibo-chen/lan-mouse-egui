@@ -406,8 +406,11 @@ async fn do_capture_session(
                     let pos = *pos_for_barrier_id.get(&barrier_id).expect("invalid barrier id");
                     current_pos.replace(Some(pos));
 
+                    // get cursor position at activation
+                    let cursor_pos = activated.cursor_position().unwrap_or((0.0, 0.0));
+
                     // client entered => send event
-                    event_tx.send((pos, CaptureEvent::Begin)).await.expect("no channel");
+                    event_tx.send((pos, CaptureEvent::Begin { x: cursor_pos.0 as f64, y: cursor_pos.1 as f64 })).await.expect("no channel");
 
                     tokio::select! {
                         _ = notify_release.notified() => { /* capture release */

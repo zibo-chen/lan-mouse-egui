@@ -132,6 +132,8 @@ fn render_canvas(app: &mut LanMouseDesktopApp, ui: &mut Ui, _ctx: &Context, size
             }
             if resp.drag_stopped() {
                 app.layout.dragging = None;
+                // Auto-save layout on drag stop
+                apply_layout(app);
             }
         }
 
@@ -355,14 +357,7 @@ fn render_controls(app: &mut LanMouseDesktopApp, ui: &mut Ui) {
                 )
                 .clicked()
             {
-                let positions = app.layout.derive_client_positions();
-                for (handle, position) in positions {
-                    if let Some(client) = app.workspace.clients.get_mut(&handle) {
-                        client.position = position;
-                    }
-                    app.send_request(FrontendRequest::UpdatePosition(handle, position));
-                }
-                app.layout.dirty = false;
+                apply_layout(app);
             }
 
             if ui
@@ -374,7 +369,35 @@ fn render_controls(app: &mut LanMouseDesktopApp, ui: &mut Ui) {
                 .clicked()
             {
                 app.layout.auto_arrange();
+                apply_layout(app);
             }
         });
     });
+}
+
+/// Send current layout to the backend: positions, layout rects, and save.
+fn apply_layout(app: &mut LanMouseDesktopApp) {
+    // Derive and send adjacent edge positions for capture barrier management
+    let positions = app.layout.derive_client_positions();
+    for (handle, pos_list) in positions {
+        if let Some(client) = app.workspace.clients.get_mut(&handle) {
+            client.position = pos_list.first().copied().unwrap_or_default();
+        }
+        app.send_request(FrontendRequest::UpdatePositions(handle, pos_list));
+    }
+
+    // Send layout rects for each client (2D coordinate mapping)
+    let client_rects = app.layout.derive_client_layout_rects();
+    for (handle, rects) in client_rects {
+        app.send_request(FrontendRequest::UpdateLayout(handle, rects));
+    }
+
+    // Send local layout rects
+    let local_rects = app.layout.derive_local_layout_rects();
+    app.send_request(FrontendRequest::UpdateLocalLayout(local_rects));
+
+    // Persist to disk
+    app.send_request(FrontendRequest::SaveConfiguration);
+
+    app.layout.dirty = false;
 }

@@ -25,6 +25,15 @@ impl Emulation for DummyEmulation {
         Ok(())
     }
     async fn create(&mut self, _: EmulationHandle) {}
+    async fn set_position(
+        &mut self,
+        x: f64,
+        y: f64,
+        handle: EmulationHandle,
+    ) -> Result<(), EmulationError> {
+        log::info!("set_position: ({handle}) ({x:.1}, {y:.1})");
+        Ok(())
+    }
     async fn destroy(&mut self, _: EmulationHandle) {}
     async fn terminate(&mut self) {
         /* nothing to do */

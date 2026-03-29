@@ -1,5 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -24,8 +25,8 @@ pub(crate) struct Capture {
 }
 
 pub(crate) enum ICaptureEvent {
-    /// a client was entered
-    CaptureBegin(CaptureHandle),
+    /// a client was entered, with crossing coordinates
+    CaptureBegin(CaptureHandle, f64, f64),
     /// capture disabled
     CaptureDisabled,
     /// capture disabled
@@ -55,8 +56,8 @@ pub(crate) enum CaptureType {
 enum CaptureRequest {
     /// capture must release the mouse
     Release,
-    /// add a capture client
-    Create(CaptureHandle, Position, CaptureType),
+    /// add a capture client (sub_handle, pos, type, real_client_handle)
+    Create(CaptureHandle, Position, CaptureType, Option<CaptureHandle>),
     /// destory a capture client
     Destroy(CaptureHandle),
     /// reenable input capture
@@ -79,6 +80,7 @@ impl Capture {
             captures: Default::default(),
             conn,
             event_tx,
+            handle_map: Default::default(),
             request_rx,
             release_bind: Rc::new(RefCell::new(release_bind)),
             state: Default::default(),
@@ -111,10 +113,11 @@ impl Capture {
         handle: CaptureHandle,
         pos: lan_mouse_ipc::Position,
         capture_type: CaptureType,
+        real_client_handle: Option<CaptureHandle>,
     ) {
         let pos = to_capture_pos(pos);
         self.request_tx
-            .send(CaptureRequest::Create(handle, pos, capture_type))
+            .send(CaptureRequest::Create(handle, pos, capture_type, real_client_handle))
             .expect("channel closed");
     }
 
@@ -159,18 +162,29 @@ struct CaptureTask {
     captures: Vec<(CaptureHandle, Position, CaptureType)>,
     conn: LanMouseConnection,
     event_tx: Sender<ICaptureEvent>,
+    /// Maps sub-handle → real client handle for connection routing.
+    handle_map: HashMap<CaptureHandle, CaptureHandle>,
     release_bind: Rc<RefCell<Vec<scancode::Linux>>>,
     request_rx: Receiver<CaptureRequest>,
     state: State,
 }
 
 impl CaptureTask {
-    fn add_capture(&mut self, handle: CaptureHandle, pos: Position, capture_type: CaptureType) {
+    fn add_capture(&mut self, handle: CaptureHandle, pos: Position, capture_type: CaptureType, real_handle: Option<CaptureHandle>) {
         self.captures.push((handle, pos, capture_type));
+        if let Some(rh) = real_handle {
+            self.handle_map.insert(handle, rh);
+        }
     }
 
     fn remove_capture(&mut self, handle: CaptureHandle) {
         self.captures.retain(|&(h, ..)| handle != h);
+        self.handle_map.remove(&handle);
+    }
+
+    /// Resolve a sub-handle to the real client handle for connection routing.
+    fn real_handle(&self, handle: CaptureHandle) -> CaptureHandle {
+        self.handle_map.get(&handle).copied().unwrap_or(handle)
     }
 
     fn is_default_capture_at(&self, pos: Position) -> bool {
@@ -204,7 +218,7 @@ impl CaptureTask {
                 tokio::select! {
                     r = self.request_rx.recv() => match r.expect("channel closed") {
                         CaptureRequest::Reenable => break,
-                        CaptureRequest::Create(h, p, t) => self.add_capture(h, p, t),
+                        CaptureRequest::Create(h, p, t, rh) => self.add_capture(h, p, t, rh),
                         CaptureRequest::Destroy(h) => self.remove_capture(h),
                         CaptureRequest::Release => { /* nothing to do */ }
                     },
@@ -298,8 +312,8 @@ impl CaptureTask {
                 e = self.request_rx.recv() => match e.expect("channel closed") {
                     CaptureRequest::Reenable => { /* already active */ },
                     CaptureRequest::Release => self.release_capture(capture).await?,
-                    CaptureRequest::Create(h, p, t) => {
-                        self.add_capture(h, p, t);
+                    CaptureRequest::Create(h, p, t, rh) => {
+                        self.add_capture(h, p, t, rh);
                         capture.create(h, p).await?;
                     }
                     CaptureRequest::Destroy(h) => {
@@ -326,11 +340,15 @@ impl CaptureTask {
             return self.release_capture(capture).await;
         }
 
-        if event == CaptureEvent::Begin {
-            self.event_tx
-                .send(ICaptureEvent::CaptureBegin(handle))
-                .expect("channel closed");
-        }
+        let (begin_x, begin_y) = match event {
+            CaptureEvent::Begin { x, y } => {
+                self.event_tx
+                    .send(ICaptureEvent::CaptureBegin(handle, x, y))
+                    .expect("channel closed");
+                (x, y)
+            }
+            _ => (0.0, 0.0),
+        };
 
         // enter only capture (for incoming connections)
         if self.get_type(handle) == CaptureType::EnterOnly {
@@ -345,7 +363,7 @@ impl CaptureTask {
         }
 
         // activated a new client
-        if event == CaptureEvent::Begin && Some(handle) != self.active_client {
+        if matches!(event, CaptureEvent::Begin { .. }) && Some(handle) != self.active_client {
             self.state = State::WaitingForAck;
             self.active_client.replace(handle);
             self.event_tx
@@ -356,15 +374,15 @@ impl CaptureTask {
         let opposite_pos = to_proto_pos(self.get_pos(handle).opposite());
 
         let event = match event {
-            CaptureEvent::Begin => ProtoEvent::Enter(opposite_pos),
+            CaptureEvent::Begin { .. } => ProtoEvent::Enter(opposite_pos, begin_x, begin_y),
             CaptureEvent::Input(e) => match self.state {
                 // connection not acknowledged, repeat `Enter` event
-                State::WaitingForAck => ProtoEvent::Enter(opposite_pos),
+                State::WaitingForAck => ProtoEvent::Enter(opposite_pos, begin_x, begin_y),
                 State::Sending => ProtoEvent::Input(e),
             },
         };
 
-        if let Err(e) = self.conn.send(event, handle).await {
+        if let Err(e) = self.conn.send(event, self.real_handle(handle)).await {
             const DUR: Duration = Duration::from_millis(500);
             debounce!(PREV_LOG, DUR, log::warn!("releasing capture: {e}"));
             capture.release().await?;
@@ -375,9 +393,10 @@ impl CaptureTask {
     async fn release_capture(&mut self, capture: &mut InputCapture) -> Result<(), CaptureError> {
         // If we have an active client, notify them we're leaving
         if let Some(handle) = self.active_client.take() {
-            log::info!("sending Leave event to client {handle}");
-            if let Err(e) = self.conn.send(ProtoEvent::Leave(0), handle).await {
-                log::warn!("failed to send Leave to client {handle}: {e}");
+            let real = self.real_handle(handle);
+            log::info!("sending Leave event to client {real}");
+            if let Err(e) = self.conn.send(ProtoEvent::Leave(0), real).await {
+                log::warn!("failed to send Leave to client {real}: {e}");
             }
         }
         capture.release().await

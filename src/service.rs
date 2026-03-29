@@ -10,9 +10,10 @@ use crate::{
 };
 use futures::StreamExt;
 use hickory_resolver::ResolveError;
+use input_capture::CaptureHandle;
 use lan_mouse_ipc::{
     AsyncFrontendListener, ClientConfig, ClientHandle, ClientState, DisplayInfo, FrontendEvent,
-    FrontendRequest, IpcError, IpcListenerCreationError, Position, Status,
+    FrontendRequest, IpcError, IpcListenerCreationError, LayoutRect, Position, Status,
 };
 use log;
 use std::{
@@ -57,6 +58,8 @@ pub struct Service {
     port: u16,
     /// local display topology for the host device
     local_screens: Vec<DisplayInfo>,
+    /// layout rects for local displays in the shared 2D layout space
+    local_layout_rects: Vec<LayoutRect>,
     /// the public key fingerprint for (D)TLS
     public_key_fingerprint: String,
     /// notify for pending frontend events
@@ -67,6 +70,14 @@ pub struct Service {
     capture_status: Status,
     /// status of input emulation (enabled / disabled)
     emulation_status: Status,
+    /// maps capture sub-handle → (client_handle, position) for multi-edge barriers
+    capture_handle_map: HashMap<CaptureHandle, (ClientHandle, Position)>,
+    /// maps client_handle → list of capture sub-handles created for it
+    client_capture_handles: HashMap<ClientHandle, Vec<CaptureHandle>>,
+    /// next unique capture sub-handle
+    next_capture_sub_handle: CaptureHandle,
+    /// multiple barrier positions per client (from layout adjacency)
+    client_positions: HashMap<ClientHandle, Vec<Position>>,
     /// keep track of registered connections to avoid duplicate barriers
     incoming_conns: HashSet<SocketAddr>,
     /// map from capture handle to connection info
@@ -90,6 +101,7 @@ impl Service {
                 fix_ips: client.ips.into_iter().collect(),
                 port: client.port,
                 pos: client.pos,
+                layout_rects: client.layout_rects,
                 cmd: client.enter_hook,
                 input_profile: client.input_profile,
             };
@@ -142,9 +154,14 @@ impl Service {
             frontend_event_pending: Default::default(),
             port,
             local_screens,
+            local_layout_rects: Vec::new(),
             pending_frontend_events: Default::default(),
             capture_status: Default::default(),
             emulation_status: Default::default(),
+            capture_handle_map: Default::default(),
+            client_capture_handles: Default::default(),
+            next_capture_sub_handle: 0,
+            client_positions: Default::default(),
             incoming_conn_info: Default::default(),
             incoming_conns: Default::default(),
             next_trigger_handle: 0,
@@ -229,6 +246,19 @@ impl Service {
                 self.update_pos(handle, pos);
                 self.save_config();
             }
+            FrontendRequest::UpdatePositions(handle, positions) => {
+                self.update_positions(handle, positions);
+                self.save_config();
+            }
+            FrontendRequest::UpdateLayout(handle, layout_rects) => {
+                self.update_layout(handle, layout_rects);
+                self.save_config();
+            }
+            FrontendRequest::UpdateLocalLayout(layout_rects) => {
+                self.local_layout_rects = layout_rects;
+                self.rebuild_captures();
+                self.save_config();
+            }
             FrontendRequest::ResolveDns(handle) => self.resolve(handle),
             FrontendRequest::Sync => self.sync_frontend(),
             FrontendRequest::RemoveAuthorizedKey(key) => {
@@ -249,12 +279,13 @@ impl Service {
         let clients = self.client_manager.clients();
         let clients = clients
             .into_iter()
-            .map(|(c, s)| ConfigClient {
+            .map(|(c, _s)| ConfigClient {
                 ips: HashSet::from_iter(c.fix_ips),
                 hostname: c.hostname,
                 port: c.port,
                 pos: c.pos,
-                active: s.active,
+                layout_rects: c.layout_rects,
+                active: _s.active,
                 enter_hook: c.cmd,
                 input_profile: c.input_profile,
             })
@@ -290,6 +321,8 @@ impl Service {
                         fingerprint,
                         addr,
                         pos,
+                        entry_x: None,
+                        entry_y: None,
                     });
                 } else {
                     self.update_incoming(addr, pos, fingerprint);
@@ -325,12 +358,12 @@ impl Service {
 
     fn handle_capture_event(&mut self, event: ICaptureEvent) {
         match event {
-            ICaptureEvent::CaptureBegin(handle) => {
-                // we entered the capture zone for an incoming connection
-                // => notify it that its capture should be released
-                if let Some(incoming) = self.incoming_conn_info.get(&handle) {
+            ICaptureEvent::CaptureBegin(sub_handle, _x, _y) => {
+                // Check if this is an incoming connection handle
+                if let Some(incoming) = self.incoming_conn_info.get(&sub_handle) {
                     self.emulation.send_leave_event(incoming.addr);
                 }
+                // (sub-handle resolution for outgoing is done via ClientEntered)
             }
             ICaptureEvent::CaptureDisabled => {
                 self.capture_status = Status::Disabled;
@@ -340,12 +373,21 @@ impl Service {
                 self.capture_status = Status::Enabled;
                 self.notify_frontend(FrontendEvent::CaptureStatus(self.capture_status));
             }
-            ICaptureEvent::ClientEntered(handle) => {
-                log::info!("entering client {handle} ...");
-                self.spawn_hook_command(handle);
+            ICaptureEvent::ClientEntered(sub_handle) => {
+                // Resolve sub-handle to real client handle
+                let client_handle = self
+                    .resolve_capture_handle(sub_handle)
+                    .map(|(h, _)| h)
+                    .unwrap_or(sub_handle);
+                log::info!("entering client {client_handle} (sub_handle={sub_handle}) ...");
+                self.spawn_hook_command(client_handle);
             }
-            ICaptureEvent::RemoteStateChanged(handle) => {
-                self.broadcast_client(handle);
+            ICaptureEvent::RemoteStateChanged(sub_handle) => {
+                let client_handle = self
+                    .resolve_capture_handle(sub_handle)
+                    .map(|(h, _)| h)
+                    .unwrap_or(sub_handle);
+                self.broadcast_client(client_handle);
             }
         }
     }
@@ -395,7 +437,8 @@ impl Service {
     fn add_incoming(&mut self, addr: SocketAddr, pos: Position, fingerprint: String) {
         let handle = Self::ENTER_HANDLE_BEGIN + self.next_trigger_handle;
         self.next_trigger_handle += 1;
-        self.capture.create(handle, pos, CaptureType::EnterOnly);
+        self.capture
+            .create(handle, pos, CaptureType::EnterOnly, None);
         self.incoming_conns.insert(addr);
         self.incoming_conn_info.insert(
             handle,
@@ -431,6 +474,8 @@ impl Service {
                 fingerprint,
                 addr,
                 pos,
+                entry_x: None,
+                entry_y: None,
             });
         }
     }
@@ -488,7 +533,7 @@ impl Service {
     fn deactivate_client(&mut self, handle: ClientHandle) {
         log::debug!("deactivating client {handle}");
         if self.client_manager.deactivate_client(handle) {
-            self.capture.destroy(handle);
+            self.destroy_client_captures(handle);
             self.broadcast_client(handle);
             log::info!("deactivated client {handle}");
         }
@@ -500,24 +545,52 @@ impl Service {
         /* resolve dns on activate */
         self.resolve(handle);
 
-        /* deactivate potential other client at this position */
-        let Some(pos) = self.client_manager.get_pos(handle) else {
-            return;
-        };
-
-        if let Some(other) = self.client_manager.client_at(pos) {
-            if other != handle {
-                self.deactivate_client(other);
-            }
-        }
-
         /* activate the client */
         if self.client_manager.activate_client(handle) {
-            /* notify capture and frontends */
-            self.capture.create(handle, pos, CaptureType::Default);
+            self.create_client_captures(handle);
             self.broadcast_client(handle);
-            log::info!("activated client {handle} ({pos})");
         }
+    }
+
+    /// Create capture barriers for a client at all its configured positions.
+    /// Uses sub-handles so each (client, position) pair gets its own capture.
+    fn create_client_captures(&mut self, handle: ClientHandle) {
+        let positions = self
+            .client_positions
+            .get(&handle)
+            .cloned()
+            .or_else(|| self.client_manager.get_pos(handle).map(|p| vec![p]))
+            .unwrap_or_default();
+
+        let mut sub_handles = Vec::new();
+        for pos in &positions {
+            let sub_handle = self.next_capture_sub_handle;
+            self.next_capture_sub_handle += 1;
+            self.capture_handle_map.insert(sub_handle, (handle, *pos));
+            self.capture
+                .create(sub_handle, *pos, CaptureType::Default, Some(handle));
+            sub_handles.push(sub_handle);
+            log::info!("activated client {handle} barrier @ {pos} (sub_handle={sub_handle})");
+        }
+        self.client_capture_handles.insert(handle, sub_handles);
+    }
+
+    /// Destroy all capture barriers for a client.
+    fn destroy_client_captures(&mut self, handle: ClientHandle) {
+        if let Some(sub_handles) = self.client_capture_handles.remove(&handle) {
+            for sub_handle in sub_handles {
+                self.capture_handle_map.remove(&sub_handle);
+                self.capture.destroy(sub_handle);
+            }
+        }
+    }
+
+    /// Resolve a capture sub-handle to the original (client_handle, position).
+    fn resolve_capture_handle(
+        &self,
+        sub_handle: CaptureHandle,
+    ) -> Option<(ClientHandle, Position)> {
+        self.capture_handle_map.get(&sub_handle).copied()
     }
 
     fn change_port(&mut self, port: u16) {
@@ -535,8 +608,9 @@ impl Service {
             .map(|(_, s)| s.active)
             .unwrap_or(false)
         {
-            self.capture.destroy(handle);
+            self.destroy_client_captures(handle);
         }
+        self.client_positions.remove(&handle);
         self.notify_frontend(FrontendEvent::Deleted(handle));
     }
 
@@ -561,10 +635,103 @@ impl Service {
     fn update_pos(&mut self, handle: ClientHandle, pos: Position) {
         // update state in event input emulator & input capture
         if self.client_manager.set_pos(handle, pos) {
-            self.deactivate_client(handle);
-            self.activate_client(handle);
+            // Also update client_positions to use this single position
+            self.client_positions.insert(handle, vec![pos]);
+            self.destroy_client_captures(handle);
+            self.create_client_captures(handle);
         }
         self.broadcast_client(handle);
+    }
+
+    fn update_positions(&mut self, handle: ClientHandle, positions: Vec<Position>) {
+        // Store the primary position for config
+        if let Some(primary) = positions.first() {
+            self.client_manager.set_pos(handle, *primary);
+        }
+        // Store all positions for barrier management
+        let changed = self.client_positions.get(&handle) != Some(&positions);
+        self.client_positions.insert(handle, positions);
+        if changed {
+            // Rebuild barriers if the client is active
+            self.destroy_client_captures(handle);
+            if self.client_manager.active_clients().contains(&handle) {
+                self.create_client_captures(handle);
+            }
+        }
+        self.broadcast_client(handle);
+    }
+
+    fn update_layout(&mut self, handle: ClientHandle, layout_rects: Vec<LayoutRect>) {
+        if self.client_manager.set_layout_rects(handle, layout_rects) {
+            self.rebuild_captures();
+        }
+        self.broadcast_client(handle);
+    }
+
+    /// rebuild all capture barriers based on current layout geometry
+    fn rebuild_captures(&mut self) {
+        let active = self.client_manager.active_clients();
+        for &handle in &active {
+            self.destroy_client_captures(handle);
+        }
+        for handle in active {
+            self.create_client_captures(handle);
+        }
+    }
+
+    /// compute entry point on the target client's display space
+    /// given a crossing point in local display coordinates and the layout geometry
+    pub(crate) fn compute_entry_point(
+        &self,
+        crossing_x: f64,
+        crossing_y: f64,
+        handle: ClientHandle,
+    ) -> (f64, f64) {
+        let local_rects = &self.local_layout_rects;
+        let client_rects = self.client_manager.get_layout_rects(handle);
+        let client_screens: Vec<DisplayInfo> = self
+            .client_manager
+            .get_state(handle)
+            .map(|(_, s)| s.screens)
+            .unwrap_or_default();
+
+        // Map crossing point from local display coords to layout space
+        let layout_point =
+            local_display_to_layout(crossing_x, crossing_y, &self.local_screens, local_rects);
+
+        // Find adjacent client rect and compute entry point in layout space
+        let (entry_lx, entry_ly, rect_idx) =
+            find_entry_on_client_rect(layout_point.0, layout_point.1, &client_rects);
+
+        // Convert from layout space to client's local display coords
+        if rect_idx < client_rects.len() && rect_idx < client_screens.len() {
+            let lr = &client_rects[rect_idx];
+            let ds = &client_screens[rect_idx];
+            // layout-space offset within this rect → fraction → display-space
+            let frac_x = if lr.w > 0.0 {
+                (entry_lx - lr.x) / lr.w
+            } else {
+                0.5
+            };
+            let frac_y = if lr.h > 0.0 {
+                (entry_ly - lr.y) / lr.h
+            } else {
+                0.5
+            };
+            let display_x = ds.x as f64 + frac_x * ds.width as f64;
+            let display_y = ds.y as f64 + frac_y * ds.height as f64;
+            (display_x, display_y)
+        } else {
+            // fallback: center of first client display
+            if let Some(ds) = client_screens.first() {
+                (
+                    ds.x as f64 + ds.width as f64 * 0.5,
+                    ds.y as f64 + ds.height as f64 * 0.5,
+                )
+            } else {
+                (0.0, 0.0)
+            }
+        }
     }
 
     fn update_enter_hook(&mut self, handle: ClientHandle, enter_hook: Option<String>) {
@@ -626,4 +793,79 @@ fn to_ipc_display(display: input_capture::DisplayInfo) -> DisplayInfo {
         height: display.height,
         primary: display.primary,
     }
+}
+
+/// Map a point in local display coordinates to layout space.
+/// Finds which local display contains the point, then maps via the layout rect.
+fn local_display_to_layout(
+    display_x: f64,
+    display_y: f64,
+    local_screens: &[DisplayInfo],
+    local_layout_rects: &[LayoutRect],
+) -> (f64, f64) {
+    for (i, screen) in local_screens.iter().enumerate() {
+        let sx = screen.x as f64;
+        let sy = screen.y as f64;
+        let sw = screen.width as f64;
+        let sh = screen.height as f64;
+        // Check if point is within (or at the edge of) this display
+        if display_x >= sx - 1.0
+            && display_x <= sx + sw + 1.0
+            && display_y >= sy - 1.0
+            && display_y <= sy + sh + 1.0
+        {
+            if let Some(lr) = local_layout_rects.get(i) {
+                let frac_x = if sw > 0.0 { (display_x - sx) / sw } else { 0.5 };
+                let frac_y = if sh > 0.0 { (display_y - sy) / sh } else { 0.5 };
+                return (lr.x + frac_x * lr.w, lr.y + frac_y * lr.h);
+            }
+        }
+    }
+    // fallback: use first screen or return as-is
+    if let (Some(screen), Some(lr)) = (local_screens.first(), local_layout_rects.first()) {
+        let frac_x = if screen.width > 0 {
+            (display_x - screen.x as f64) / screen.width as f64
+        } else {
+            0.5
+        };
+        let frac_y = if screen.height > 0 {
+            (display_y - screen.y as f64) / screen.height as f64
+        } else {
+            0.5
+        };
+        (lr.x + frac_x * lr.w, lr.y + frac_y * lr.h)
+    } else {
+        (display_x, display_y)
+    }
+}
+
+/// Find the entry point on the nearest client rect edge given a layout-space point.
+/// Returns (entry_x, entry_y, rect_index).
+fn find_entry_on_client_rect(lx: f64, ly: f64, client_rects: &[LayoutRect]) -> (f64, f64, usize) {
+    if client_rects.is_empty() {
+        return (lx, ly, 0);
+    }
+
+    // Find the nearest client rect to the layout point
+    let mut best_idx = 0;
+    let mut best_dist = f64::MAX;
+    for (i, r) in client_rects.iter().enumerate() {
+        // distance from point to nearest point on rect
+        let nearest_x = lx.clamp(r.x, r.x + r.w);
+        let nearest_y = ly.clamp(r.y, r.y + r.h);
+        let dx = lx - nearest_x;
+        let dy = ly - nearest_y;
+        let dist = dx * dx + dy * dy;
+        if dist < best_dist {
+            best_dist = dist;
+            best_idx = i;
+        }
+    }
+
+    let r = &client_rects[best_idx];
+    // Clamp the layout point to just inside the client rect
+    let entry_x = lx.clamp(r.x, r.x + r.w - 1.0);
+    let entry_y = ly.clamp(r.y, r.y + r.h - 1.0);
+
+    (entry_x, entry_y, best_idx)
 }

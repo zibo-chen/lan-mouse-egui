@@ -165,6 +165,16 @@ impl Emulation for WlrootsEmulation {
             log::error!("{e}");
         }
     }
+    async fn set_position(
+        &mut self,
+        _x: f64,
+        _y: f64,
+        _handle: EmulationHandle,
+    ) -> Result<(), EmulationError> {
+        // wlroots virtual-pointer protocol only supports relative motion
+        log::warn!("absolute cursor positioning not supported via wlroots virtual-pointer");
+        Ok(())
+    }
     async fn destroy(&mut self, handle: EmulationHandle) {
         self.state.destroy_client(handle);
         if let Err(e) = self.queue.flush() {

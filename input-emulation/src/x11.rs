@@ -144,6 +144,29 @@ impl Emulation for X11Emulation {
         // for our purposes it does not matter what client sent the event
     }
 
+    async fn set_position(
+        &mut self,
+        x: f64,
+        y: f64,
+        _handle: EmulationHandle,
+    ) -> Result<(), EmulationError> {
+        unsafe {
+            x11::xlib::XWarpPointer(
+                self.display,
+                0,
+                x11::xlib::XDefaultRootWindow(self.display),
+                0,
+                0,
+                0,
+                0,
+                x as i32,
+                y as i32,
+            );
+            x11::xlib::XFlush(self.display);
+        }
+        Ok(())
+    }
+
     async fn destroy(&mut self, _: EmulationHandle) {
         // for our purposes it does not matter what client sent the event
     }

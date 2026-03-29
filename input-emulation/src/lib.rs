@@ -163,6 +163,16 @@ impl InputEmulation {
         }
     }
 
+    /// warp cursor to absolute position in local display coordinates
+    pub async fn set_position(
+        &mut self,
+        x: f64,
+        y: f64,
+        handle: EmulationHandle,
+    ) -> Result<(), EmulationError> {
+        self.emulation.set_position(x, y, handle).await
+    }
+
     pub async fn destroy(&mut self, handle: EmulationHandle) {
         let _ = self.release_keys(handle).await;
         if self.handles.remove(&handle) {
@@ -232,6 +242,13 @@ trait Emulation: Send {
     async fn consume(
         &mut self,
         event: Event,
+        handle: EmulationHandle,
+    ) -> Result<(), EmulationError>;
+    /// warp the cursor to absolute coordinates in local display space
+    async fn set_position(
+        &mut self,
+        x: f64,
+        y: f64,
         handle: EmulationHandle,
     ) -> Result<(), EmulationError>;
     async fn create(&mut self, handle: EmulationHandle);

@@ -15,7 +15,7 @@ use toml;
 use toml_edit::{self, DocumentMut};
 
 use lan_mouse_cli::CliArgs;
-use lan_mouse_ipc::{DEFAULT_PORT, InputProfile, Position};
+use lan_mouse_ipc::{DEFAULT_PORT, InputProfile, LayoutRect, Position};
 
 use input_event::scancode::{
     self,
@@ -64,6 +64,7 @@ struct TomlClient {
     ips: Option<Vec<IpAddr>>,
     port: Option<u16>,
     position: Option<Position>,
+    layout_rects: Option<Vec<LayoutRect>>,
     activate_on_startup: Option<bool>,
     enter_hook: Option<String>,
     input_profile: Option<InputProfile>,
@@ -254,6 +255,7 @@ pub struct ConfigClient {
     pub hostname: Option<String>,
     pub port: u16,
     pub pos: Position,
+    pub layout_rects: Vec<LayoutRect>,
     pub active: bool,
     pub enter_hook: Option<String>,
     pub input_profile: InputProfile,
@@ -267,12 +269,14 @@ impl From<TomlClient> for ConfigClient {
         let ips = HashSet::from_iter(toml.ips.into_iter().flatten());
         let port = toml.port.unwrap_or(DEFAULT_PORT);
         let pos = toml.position.unwrap_or_default();
+        let layout_rects = toml.layout_rects.unwrap_or_default();
         let input_profile = toml.input_profile.unwrap_or_default();
         Self {
             ips,
             hostname,
             port,
             pos,
+            layout_rects,
             active,
             enter_hook,
             input_profile,
@@ -293,6 +297,11 @@ impl From<ConfigClient> for TomlClient {
             Some(client.port)
         };
         let position = Some(client.pos);
+        let layout_rects = if client.layout_rects.is_empty() {
+            None
+        } else {
+            Some(client.layout_rects)
+        };
         let activate_on_startup = if client.active { Some(true) } else { None };
         let enter_hook = client.enter_hook;
         let input_profile = Some(client.input_profile);
@@ -302,6 +311,7 @@ impl From<ConfigClient> for TomlClient {
             ips,
             port,
             position,
+            layout_rects,
             activate_on_startup,
             enter_hook,
             input_profile,

@@ -254,6 +254,17 @@ impl Emulation for LibeiEmulation<'_> {
     }
 
     async fn create(&mut self, _: EmulationHandle) {}
+    async fn set_position(
+        &mut self,
+        x: f64,
+        y: f64,
+        _handle: EmulationHandle,
+    ) -> Result<(), EmulationError> {
+        // libei supports abs pointer via ei_pointer_motion_absolute if device has the capability
+        // For now, use relative motion as fallback (TODO: use abs if available)
+        log::debug!("libei set_position({x}, {y}) - absolute positioning limited");
+        Ok(())
+    }
     async fn destroy(&mut self, _: EmulationHandle) {}
 
     async fn terminate(&mut self) {

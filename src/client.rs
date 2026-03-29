@@ -7,7 +7,7 @@ use std::{
 
 use slab::Slab;
 
-use lan_mouse_ipc::{ClientConfig, ClientHandle, ClientState, InputProfile, Position};
+use lan_mouse_ipc::{ClientConfig, ClientHandle, ClientState, InputProfile, LayoutRect, Position};
 
 #[derive(Clone, Default)]
 pub struct ClientManager {
@@ -305,5 +305,44 @@ impl ClientManager {
             .borrow()
             .get(handle as usize)
             .map(|(_, s)| s.ips.clone())
+    }
+
+    /// update layout rects for a client
+    pub(crate) fn set_layout_rects(&self, handle: ClientHandle, layout_rects: Vec<LayoutRect>) -> bool {
+        match self.clients.borrow_mut().get_mut(handle as usize) {
+            Some((c, s)) if c.layout_rects != layout_rects => {
+                log::info!("update layout_rects {handle}: {} rects", layout_rects.len());
+                c.layout_rects = layout_rects;
+                s.active
+            }
+            _ => false,
+        }
+    }
+
+    /// get layout rects for a client
+    pub(crate) fn get_layout_rects(&self, handle: ClientHandle) -> Vec<LayoutRect> {
+        self.clients
+            .borrow()
+            .get(handle as usize)
+            .map(|(c, _)| c.layout_rects.clone())
+            .unwrap_or_default()
+    }
+
+    /// find which client + rect contains the given point in layout space.
+    /// returns (client_handle, rect_index) if found
+    pub(crate) fn client_at_layout_point(&self, x: f64, y: f64) -> Option<(ClientHandle, usize)> {
+        self.clients
+            .borrow()
+            .iter()
+            .filter(|(_, (_, s))| s.active)
+            .find_map(|(k, (c, _))| {
+                c.layout_rects.iter().enumerate().find_map(|(i, r)| {
+                    if x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h {
+                        Some((k as ClientHandle, i))
+                    } else {
+                        None
+                    }
+                })
+            })
     }
 }

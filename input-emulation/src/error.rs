@@ -41,6 +41,9 @@ pub enum EmulationError {
     Ashpd(#[from] ashpd::Error),
     #[error("io error: `{0}`")]
     Io(#[from] io::Error),
+    #[cfg(target_os = "macos")]
+    #[error("macos: `{0}`")]
+    Macos(String),
 }
 
 #[derive(Debug, Error)]
