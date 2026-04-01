@@ -13,6 +13,8 @@ use input_event::scancode;
 use lan_mouse_proto::{LayoutRectProto, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use tokio::task::{JoinHandle, spawn_local};
+
+use crate::layout_mapping::LayoutMapping;
 use tokio_util::sync::CancellationToken;
 
 use crate::connect::{ConnectionEvent, LanMouseConnection};
@@ -64,6 +66,8 @@ enum CaptureRequest {
     Reenable,
     /// send layout sync to a specific client
     SendLayoutSync(CaptureHandle, Vec<LayoutRectProto>, Vec<LayoutRectProto>),
+    /// update layout mapping info for coordinate transformation
+    UpdateLayoutMapping(LayoutMapping),
 }
 
 impl Capture {
@@ -83,6 +87,7 @@ impl Capture {
             conn,
             event_tx,
             handle_map: Default::default(),
+            layout_mapping: Default::default(),
             request_rx,
             release_bind: Rc::new(RefCell::new(release_bind)),
             state: Default::default(),
@@ -155,6 +160,12 @@ impl Capture {
             .expect("channel closed");
     }
 
+    pub(crate) fn update_layout_mapping(&self, mapping: LayoutMapping) {
+        self.request_tx
+            .send(CaptureRequest::UpdateLayoutMapping(mapping))
+            .expect("channel closed");
+    }
+
     pub(crate) async fn event(&mut self) -> ICaptureEvent {
         self.event_rx.recv().await.expect("channel closed")
     }
@@ -186,6 +197,8 @@ struct CaptureTask {
     event_tx: Sender<ICaptureEvent>,
     /// Maps sub-handle → real client handle for connection routing.
     handle_map: HashMap<CaptureHandle, CaptureHandle>,
+    /// Layout mapping for coordinate transformation on barrier crossing.
+    layout_mapping: LayoutMapping,
     release_bind: Rc<RefCell<Vec<scancode::Linux>>>,
     request_rx: Receiver<CaptureRequest>,
     state: State,
@@ -254,6 +267,9 @@ impl CaptureTask {
                             if let Err(e) = self.conn.send(event, h).await {
                                 log::warn!("failed to send LayoutSync to {h}: {e}");
                             }
+                        }
+                        CaptureRequest::UpdateLayoutMapping(mapping) => {
+                            self.layout_mapping = mapping;
                         }
                     },
                     _ = self.cancellation_token.cancelled() => return,
@@ -360,6 +376,9 @@ impl CaptureTask {
                             log::warn!("failed to send LayoutSync to {h}: {e}");
                         }
                     }
+                    CaptureRequest::UpdateLayoutMapping(mapping) => {
+                        self.layout_mapping = mapping;
+                    }
                 },
                 _ = self.cancellation_token.cancelled() => break,
             }
@@ -413,11 +432,19 @@ impl CaptureTask {
 
         let opposite_pos = to_proto_pos(self.get_pos(handle).opposite());
 
+        // Transform coordinates from local display space to the remote client's display space
+        // using the layout mapping. Falls back to raw coordinates if no mapping available.
+        let real_client = self.real_handle(handle);
+        let (entry_x, entry_y) = self
+            .layout_mapping
+            .compute_entry_point(begin_x, begin_y, real_client)
+            .unwrap_or((begin_x, begin_y));
+
         let event = match event {
-            CaptureEvent::Begin { .. } => ProtoEvent::Enter(opposite_pos, begin_x, begin_y),
+            CaptureEvent::Begin { .. } => ProtoEvent::Enter(opposite_pos, entry_x, entry_y),
             CaptureEvent::Input(e) => match self.state {
                 // connection not acknowledged, repeat `Enter` event
-                State::WaitingForAck => ProtoEvent::Enter(opposite_pos, begin_x, begin_y),
+                State::WaitingForAck => ProtoEvent::Enter(opposite_pos, entry_x, entry_y),
                 State::Sending => ProtoEvent::Input(e),
             },
         };

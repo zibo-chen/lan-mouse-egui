@@ -42,6 +42,7 @@ pub struct ClientViewModel {
     pub port_dirty: bool,
     pub position: Position,
     pub input_profile: InputProfile,
+    pub layout_rects: Vec<LayoutRect>,
     pub active: bool,
     pub resolving: bool,
     pub has_ips: bool,
@@ -63,6 +64,7 @@ impl ClientViewModel {
             port_dirty: false,
             position: config.pos,
             input_profile: config.input_profile,
+            layout_rects: config.layout_rects,
             active: false,
             resolving: false,
             has_ips: false,
@@ -90,6 +92,7 @@ impl ClientViewModel {
 
         self.position = config.pos;
         self.input_profile = config.input_profile;
+        self.layout_rects = config.layout_rects;
     }
 
     pub fn apply_state(&mut self, state: ClientState) {
@@ -389,6 +392,7 @@ impl LayoutState {
             None,
             format!("主机 ({})", ws.local_hostname),
             &ws.local_screens,
+            &[], // local screens use existing canvas positions or fallback
             100.0,
             150.0,
         );
@@ -404,6 +408,7 @@ impl LayoutState {
                 Some(*handle),
                 format!("客户端 {} ({})", handle, ip_label),
                 &client.screens,
+                &client.layout_rects,
                 140.0 + index as f32 * 280.0,
                 340.0,
             );
@@ -416,6 +421,7 @@ impl LayoutState {
         client: Option<ClientHandle>,
         device_label: String,
         displays: &[DeviceDisplay],
+        layout_rects: &[LayoutRect],
         fallback_x: f32,
         fallback_y: f32,
     ) {
@@ -431,12 +437,20 @@ impl LayoutState {
                 client,
                 monitor: monitor as u32,
             };
-            let default_x = fallback_x + (display.x - min_x) as f32 * self.scale;
-            let default_y = fallback_y + (display.y - min_y) as f32 * self.scale;
-            let (x, y) = old
-                .get(&(screen_id.client, screen_id.monitor))
-                .copied()
-                .unwrap_or((default_x, default_y));
+
+            // Priority: 1) existing canvas position, 2) saved layout rect, 3) fallback
+            let (x, y) = if let Some(&(ox, oy)) =
+                old.get(&(screen_id.client, screen_id.monitor))
+            {
+                (ox, oy)
+            } else if let Some(lr) = layout_rects.get(monitor) {
+                // layout_rects are in real-pixel layout space → convert to canvas coords
+                (lr.x as f32 * self.scale, lr.y as f32 * self.scale)
+            } else {
+                let default_x = fallback_x + (display.x - min_x) as f32 * self.scale;
+                let default_y = fallback_y + (display.y - min_y) as f32 * self.scale;
+                (default_x, default_y)
+            };
 
             self.screens.push(LayoutScreen {
                 id: screen_id,

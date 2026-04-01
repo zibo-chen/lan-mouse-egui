@@ -6,6 +6,7 @@ use crate::{
     crypto,
     dns::{DnsEvent, DnsResolver},
     emulation::{Emulation, EmulationEvent},
+    layout_mapping::{ClientLayoutInfo, LayoutMapping},
     listen::{LanMouseListener, ListenerCreationError},
 };
 use futures::StreamExt;
@@ -354,6 +355,14 @@ impl Service {
             EmulationEvent::ReleaseNotify => self.capture.release(),
             EmulationEvent::Connected { addr, fingerprint } => {
                 self.notify_frontend(FrontendEvent::DeviceConnected { addr, fingerprint });
+                // Auto-sync layout to newly connected peer
+                if let Some(handle) = self
+                    .client_manager
+                    .find_handle_by_addr(addr)
+                    .or_else(|| self.client_manager.find_handle_by_ip(addr.ip()))
+                {
+                    self.sync_layout_to_single_peer(handle);
+                }
             }
             EmulationEvent::LayoutSync {
                 addr,
@@ -557,6 +566,7 @@ impl Service {
         /* activate the client */
         if self.client_manager.activate_client(handle) {
             self.create_client_captures(handle);
+            self.send_layout_to_capture();
             self.broadcast_client(handle);
         }
     }
@@ -755,12 +765,16 @@ impl Service {
             .collect();
 
         // Update stored layout rects for the client
-        self.client_manager
+        let client_rects_changed = self
+            .client_manager
             .set_layout_rects(handle, client_layout_rects.clone());
         // Update local layout rects
+        let local_rects_changed = self.local_layout_rects != local_layout_rects;
         self.local_layout_rects = local_layout_rects.clone();
 
-        self.rebuild_captures();
+        if client_rects_changed || local_rects_changed {
+            self.rebuild_captures();
+        }
 
         // Notify frontend about the layout sync
         self.notify_frontend(FrontendEvent::LayoutSynced {
@@ -768,6 +782,39 @@ impl Service {
             sender_rects: client_layout_rects,
             receiver_rects: local_layout_rects,
         });
+
+        // Send our layout back to the peer so they know our arrangement too.
+        // Only do this if something actually changed, to prevent infinite ping-pong.
+        if client_rects_changed || local_rects_changed {
+            self.sync_layout_to_single_peer(handle);
+        }
+    }
+
+    /// Send layout to a single peer (used for reciprocal sync).
+    fn sync_layout_to_single_peer(&mut self, handle: ClientHandle) {
+        let local_rects: Vec<LayoutRectProto> = self
+            .local_layout_rects
+            .iter()
+            .map(|r| LayoutRectProto {
+                x: r.x,
+                y: r.y,
+                w: r.w,
+                h: r.h,
+            })
+            .collect();
+        let client_rects: Vec<LayoutRectProto> = self
+            .client_manager
+            .get_layout_rects(handle)
+            .into_iter()
+            .map(|r| LayoutRectProto {
+                x: r.x,
+                y: r.y,
+                w: r.w,
+                h: r.h,
+            })
+            .collect();
+        self.capture
+            .send_layout_sync(handle, local_rects, client_rects);
     }
 
     /// rebuild all capture barriers based on current layout geometry
@@ -779,6 +826,13 @@ impl Service {
         for handle in active {
             self.create_client_captures(handle);
         }
+        self.send_layout_to_capture();
+    }
+
+    /// Build a `LayoutMapping` from current state and send it to the capture task.
+    fn send_layout_to_capture(&self) {
+        self.capture
+            .update_layout_mapping(self.build_layout_mapping());
     }
 
     /// compute entry point on the target client's display space
@@ -789,50 +843,34 @@ impl Service {
         crossing_y: f64,
         handle: ClientHandle,
     ) -> (f64, f64) {
-        let local_rects = &self.local_layout_rects;
-        let client_rects = self.client_manager.get_layout_rects(handle);
-        let client_screens: Vec<DisplayInfo> = self
-            .client_manager
-            .get_state(handle)
-            .map(|(_, s)| s.screens)
-            .unwrap_or_default();
+        let mapping = self.build_layout_mapping();
+        mapping
+            .compute_entry_point(crossing_x, crossing_y, handle)
+            .unwrap_or((crossing_x, crossing_y))
+    }
 
-        // Map crossing point from local display coords to layout space
-        let layout_point =
-            local_display_to_layout(crossing_x, crossing_y, &self.local_screens, local_rects);
-
-        // Find adjacent client rect and compute entry point in layout space
-        let (entry_lx, entry_ly, rect_idx) =
-            find_entry_on_client_rect(layout_point.0, layout_point.1, &client_rects);
-
-        // Convert from layout space to client's local display coords
-        if rect_idx < client_rects.len() && rect_idx < client_screens.len() {
-            let lr = &client_rects[rect_idx];
-            let ds = &client_screens[rect_idx];
-            // layout-space offset within this rect → fraction → display-space
-            let frac_x = if lr.w > 0.0 {
-                (entry_lx - lr.x) / lr.w
-            } else {
-                0.5
-            };
-            let frac_y = if lr.h > 0.0 {
-                (entry_ly - lr.y) / lr.h
-            } else {
-                0.5
-            };
-            let display_x = ds.x as f64 + frac_x * ds.width as f64;
-            let display_y = ds.y as f64 + frac_y * ds.height as f64;
-            (display_x, display_y)
-        } else {
-            // fallback: center of first client display
-            if let Some(ds) = client_screens.first() {
-                (
-                    ds.x as f64 + ds.width as f64 * 0.5,
-                    ds.y as f64 + ds.height as f64 * 0.5,
-                )
-            } else {
-                (0.0, 0.0)
-            }
+    /// Build a LayoutMapping from the current service state.
+    fn build_layout_mapping(&self) -> LayoutMapping {
+        let mut client_info = HashMap::new();
+        for handle in self.client_manager.active_clients() {
+            let layout_rects = self.client_manager.get_layout_rects(handle);
+            let screens = self
+                .client_manager
+                .get_state(handle)
+                .map(|(_, s)| s.screens)
+                .unwrap_or_default();
+            client_info.insert(
+                handle,
+                ClientLayoutInfo {
+                    layout_rects,
+                    screens,
+                },
+            );
+        }
+        LayoutMapping {
+            local_screens: self.local_screens.clone(),
+            local_layout_rects: self.local_layout_rects.clone(),
+            client_info,
         }
     }
 
@@ -895,79 +933,4 @@ fn to_ipc_display(display: input_capture::DisplayInfo) -> DisplayInfo {
         height: display.height,
         primary: display.primary,
     }
-}
-
-/// Map a point in local display coordinates to layout space.
-/// Finds which local display contains the point, then maps via the layout rect.
-fn local_display_to_layout(
-    display_x: f64,
-    display_y: f64,
-    local_screens: &[DisplayInfo],
-    local_layout_rects: &[LayoutRect],
-) -> (f64, f64) {
-    for (i, screen) in local_screens.iter().enumerate() {
-        let sx = screen.x as f64;
-        let sy = screen.y as f64;
-        let sw = screen.width as f64;
-        let sh = screen.height as f64;
-        // Check if point is within (or at the edge of) this display
-        if display_x >= sx - 1.0
-            && display_x <= sx + sw + 1.0
-            && display_y >= sy - 1.0
-            && display_y <= sy + sh + 1.0
-        {
-            if let Some(lr) = local_layout_rects.get(i) {
-                let frac_x = if sw > 0.0 { (display_x - sx) / sw } else { 0.5 };
-                let frac_y = if sh > 0.0 { (display_y - sy) / sh } else { 0.5 };
-                return (lr.x + frac_x * lr.w, lr.y + frac_y * lr.h);
-            }
-        }
-    }
-    // fallback: use first screen or return as-is
-    if let (Some(screen), Some(lr)) = (local_screens.first(), local_layout_rects.first()) {
-        let frac_x = if screen.width > 0 {
-            (display_x - screen.x as f64) / screen.width as f64
-        } else {
-            0.5
-        };
-        let frac_y = if screen.height > 0 {
-            (display_y - screen.y as f64) / screen.height as f64
-        } else {
-            0.5
-        };
-        (lr.x + frac_x * lr.w, lr.y + frac_y * lr.h)
-    } else {
-        (display_x, display_y)
-    }
-}
-
-/// Find the entry point on the nearest client rect edge given a layout-space point.
-/// Returns (entry_x, entry_y, rect_index).
-fn find_entry_on_client_rect(lx: f64, ly: f64, client_rects: &[LayoutRect]) -> (f64, f64, usize) {
-    if client_rects.is_empty() {
-        return (lx, ly, 0);
-    }
-
-    // Find the nearest client rect to the layout point
-    let mut best_idx = 0;
-    let mut best_dist = f64::MAX;
-    for (i, r) in client_rects.iter().enumerate() {
-        // distance from point to nearest point on rect
-        let nearest_x = lx.clamp(r.x, r.x + r.w);
-        let nearest_y = ly.clamp(r.y, r.y + r.h);
-        let dx = lx - nearest_x;
-        let dy = ly - nearest_y;
-        let dist = dx * dx + dy * dy;
-        if dist < best_dist {
-            best_dist = dist;
-            best_idx = i;
-        }
-    }
-
-    let r = &client_rects[best_idx];
-    // Clamp the layout point to just inside the client rect
-    let entry_x = lx.clamp(r.x, r.x + r.w - 1.0);
-    let entry_y = ly.clamp(r.y, r.y + r.h - 1.0);
-
-    (entry_x, entry_y, best_idx)
 }
